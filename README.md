@@ -72,10 +72,10 @@ micropki ca init \
 
 <out-dir>/
 ├── private/
-│   └── ca.key.pem          # Зашифрованный закрытый ключ
+│   └── ca.key.pem         
 ├── certs/
-│   └── ca.cert.pem          # Самоподписанный сертификат
-└── policy.txt               # Документ политики сертификации
+│   └── ca.cert.pem          
+└── policy.txt              
 Проверка сертификата с помощью OpenSSL
 
 # Просмотр информации о сертификате
@@ -110,18 +110,18 @@ ls -la test-pki/certs/
 Архитектура проекта
 
 PythonProjectMicroPKI/
-├── micropki/                  # Основной пакет
-│   ├── __init__.py            # Версия пакета
-│   ├── cli.py                 # Интерфейс командной строки
-│   ├── ca.py                  # Логика корневого CA
-│   ├── certificates.py        # Работа с X.509 сертификатами
-│   ├── crypto_utils.py        # Криптографические утилиты
-│   └── logger.py              # Настройка логирования
-├── tests/                      # Тесты
+├── micropki/                  
+│   ├── __init__.py            
+│   ├── cli.py                
+│   ├── ca.py                  
+│   ├── certificates.py        
+│   ├── crypto_utils.py        
+│   └── logger.py              
+├── tests/                      
 │   ├── __init__.py
-│   ├── test_ca.py             # Тесты CA
-│   └── test_crypto_utils.py   # Тесты крипто-утилит
-├── requirements.txt            # Зависимости
-├── setup.py                    # Установочный файл
-├── pyproject.toml              # Альтернативный установочный файл
-└── README.md                   # Документация
+│   ├── test_ca.py             
+│   └── test_crypto_utils.py   
+├── requirements.txt           
+├── setup.py                    
+├── pyproject.toml              
+└── README.md                   
