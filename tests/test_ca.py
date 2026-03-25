@@ -78,7 +78,7 @@ def test_key_and_certificate_match(temp_dir, passphrase_file):
         validity_days=365
     )
 
-    # FIXED: Load and decrypt key, then verify against cert
+    # Load and decrypt key, then verify against cert
     cert_path = temp_dir / "pki/certs/ca.cert.pem"
     key_path = temp_dir / "pki/private/ca.key.pem"
     passphrase = load_passphrase(passphrase_file)
@@ -97,7 +97,6 @@ def test_key_and_certificate_match(temp_dir, passphrase_file):
     assert verify_key_pair(private_key, certificate.public_key()) is True
 
 
-# FIXED: New test for TEST-3
 def test_encrypted_key_loading(temp_dir, passphrase_file):
     """Test that encrypted private key can be loaded and decrypted."""
     ca = RootCA(str(temp_dir / "pki"))
@@ -116,3 +115,48 @@ def test_encrypted_key_loading(temp_dir, passphrase_file):
     private_key = load_encrypted_private_key(key_path, passphrase)
     assert private_key is not None
     assert private_key.key_size == 4096
+
+
+def test_ca_initialization_invalid_key_size(temp_dir, passphrase_file):
+    """Test CA initialization with invalid key size."""
+    ca = RootCA(str(temp_dir / "pki"))
+
+    # RSA with wrong size (2048 is not allowed for Root CA)
+    with pytest.raises(ValueError, match="RSA key size for Root CA must be 4096 bits"):
+        ca.init_ca(
+            subject="/CN=Test",
+            key_type="rsa",
+            key_size=2048,
+            passphrase_file=str(passphrase_file),
+            validity_days=365
+        )
+
+    # RSA with invalid size (1024)
+    with pytest.raises(ValueError, match="RSA key size for Root CA must be 4096 bits"):
+        ca.init_ca(
+            subject="/CN=Test",
+            key_type="rsa",
+            key_size=1024,
+            passphrase_file=str(passphrase_file),
+            validity_days=365
+        )
+
+    # ECC with wrong size (256 is not allowed for Root CA)
+    with pytest.raises(ValueError, match="ECC key size for Root CA must be 384 bits"):
+        ca.init_ca(
+            subject="/CN=Test",
+            key_type="ecc",
+            key_size=256,
+            passphrase_file=str(passphrase_file),
+            validity_days=365
+        )
+
+    # ECC with invalid size (521)
+    with pytest.raises(ValueError, match="ECC key size for Root CA must be 384 bits"):
+        ca.init_ca(
+            subject="/CN=Test",
+            key_type="ecc",
+            key_size=521,
+            passphrase_file=str(passphrase_file),
+            validity_days=365
+        )
