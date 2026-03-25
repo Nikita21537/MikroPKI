@@ -311,7 +311,7 @@ micropki verify \
     --intermediate ./pki/certs/intermediate.cert.pem \
     --root ./pki/certs/ca.cert.pem
 Структура директорий
-~~
+~~~~
 pki/
 ├── private/
 │   ├── ca.key.pem               # Зашифрованный ключ Root CA
@@ -322,7 +322,7 @@ pki/
 │   └── *.cert.pem              # Выпущенные сертификаты
 ├── csrs/                       # Опционально, для хранения CSR
 └── policy.txt                  # Документ политики
-~~
+~~~~
 ##Требования
 Python ≥ 3.8
 
@@ -346,7 +346,7 @@ pytest tests/ -v
 # Проверка цепочки сертификатов с OpenSSL
 openssl verify -CAfile pki/certs/ca.cert.pem -untrusted pki/certs/intermediate.cert.pem pki/certs/example.com.cert.pem
 # Архитектура
-~~
+~~~~
 PythonProjectMicroPKI/
 ├── micropki/
 │   ├── __init__.py
@@ -371,4 +371,4 @@ PythonProjectMicroPKI/
 ├── setup.py
 ├── pyproject.toml
 └── README.md
-~~
+~~~~
