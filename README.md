@@ -185,7 +185,7 @@ micropki ca init \
     --validity-days 3650
 ECC P-384 (более производительный):
 
-bash
+
 micropki ca init \
     --subject "CN=MicroPKI ECC Root CA,O=MicroPKI,C=RU" \
     --key-type ecc \
@@ -194,7 +194,7 @@ micropki ca init \
     --out-dir ./pki \
     --validity-days 3650
 2. Создание промежуточного CA
-bash
+
 micropki ca issue-intermediate \
     --root-cert ./pki/certs/ca.cert.pem \
     --root-key ./pki/private/ca.key.pem \
@@ -207,7 +207,7 @@ micropki ca issue-intermediate \
     --pathlen 0
 3. Выпуск сертификатов
 Серверный сертификат (для HTTPS/TLS)
-bash
+
 micropki ca issue-cert \
     --ca-cert ./pki/certs/intermediate.cert.pem \
     --ca-key ./pki/private/intermediate.key.pem \
@@ -220,7 +220,7 @@ micropki ca issue-cert \
     --out-dir ./pki/certs \
     --validity-days 365
 Клиентский сертификат (для аутентификации)
-bash
+
 micropki ca issue-cert \
     --ca-cert ./pki/certs/intermediate.cert.pem \
     --ca-key ./pki/private/intermediate.key.pem \
@@ -231,7 +231,7 @@ micropki ca issue-cert \
     --out-dir ./pki/certs \
     --validity-days 365
 Сертификат для подписи кода
-bash
+
 micropki ca issue-cert \
     --ca-cert ./pki/certs/intermediate.cert.pem \
     --ca-key ./pki/private/intermediate.key.pem \
@@ -241,7 +241,7 @@ micropki ca issue-cert \
     --out-dir ./pki/certs \
     --validity-days 365
 4. Проверка цепочки сертификатов
-bash
+
 micropki verify \
     --leaf ./pki/certs/example.com.cert.pem \
     --intermediate ./pki/certs/intermediate.cert.pem \
@@ -250,7 +250,7 @@ micropki verify \
 
 ### 1. Создание Root CA
 
-```bash
+
 micropki ca init \
     --subject "CN=MicroPKI Root CA,O=MicroPKI" \
     --key-type rsa \
@@ -259,7 +259,7 @@ micropki ca init \
     --out-dir ./pki \
     --validity-days 3650
 2. Создание Intermediate CA
-bash
+
 micropki ca issue-intermediate \
     --root-cert ./pki/certs/ca.cert.pem \
     --root-key ./pki/private/ca.key.pem \
@@ -272,7 +272,7 @@ micropki ca issue-intermediate \
     --pathlen 0
 3. Выпуск сертификатов
 Серверный сертификат
-bash
+
 micropki ca issue-cert \
     --ca-cert ./pki/certs/intermediate.cert.pem \
     --ca-key ./pki/private/intermediate.key.pem \
@@ -285,7 +285,7 @@ micropki ca issue-cert \
     --out-dir ./pki/certs \
     --validity-days 365
 Клиентский сертификат
-bash
+
 micropki ca issue-cert \
     --ca-cert ./pki/certs/intermediate.cert.pem \
     --ca-key ./pki/private/intermediate.key.pem \
@@ -295,7 +295,7 @@ micropki ca issue-cert \
     --san email:alice@example.com \
     --out-dir ./pki/certs
 Сертификат для подписи кода
-bash
+
 micropki ca issue-cert \
     --ca-cert ./pki/certs/intermediate.cert.pem \
     --ca-key ./pki/private/intermediate.key.pem \
@@ -304,7 +304,7 @@ micropki ca issue-cert \
     --subject "CN=MicroPKI Code Signer" \
     --out-dir ./pki/certs
 4. Проверка цепочки сертификатов
-bash
+
 micropki verify \
     --leaf ./pki/certs/example.com.cert.pem \
     --intermediate ./pki/certs/intermediate.cert.pem \
