@@ -76,7 +76,7 @@ micropki ca init \
 ├── certs/
 │   └── ca.cert.pem          
 └── policy.txt
-~~~
+~~~~
 Проверка сертификата с помощью OpenSSL
 
 # Просмотр информации о сертификате
@@ -109,7 +109,7 @@ ls -la test-pki/
 ls -la test-pki/private/
 ls -la test-pki/certs/
 Архитектура проекта
-
+~~~
 PythonProjectMicroPKI/
 ├── micropki/                  
 │   ├── __init__.py            
@@ -127,7 +127,7 @@ PythonProjectMicroPKI/
 ├── pyproject.toml              
 └── README.md                   
 # MicroPKI - Minimal Public Key Infrastructure
-
+~~~
 Минимальная реализация PKI для образовательных целей.
 
 ## Sprint 2 Features
@@ -311,7 +311,7 @@ micropki verify \
     --intermediate ./pki/certs/intermediate.cert.pem \
     --root ./pki/certs/ca.cert.pem
 Структура директорий
-
+~~
 pki/
 ├── private/
 │   ├── ca.key.pem               # Зашифрованный ключ Root CA
@@ -322,7 +322,8 @@ pki/
 │   └── *.cert.pem              # Выпущенные сертификаты
 ├── csrs/                       # Опционально, для хранения CSR
 └── policy.txt                  # Документ политики
-Требования
+~~
+##Требования
 Python ≥ 3.8
 
 cryptography ≥ 41.0.0
@@ -345,6 +346,7 @@ pytest tests/ -v
 # Проверка цепочки сертификатов с OpenSSL
 openssl verify -CAfile pki/certs/ca.cert.pem -untrusted pki/certs/intermediate.cert.pem pki/certs/example.com.cert.pem
 # Архитектура
+~~
 PythonProjectMicroPKI/
 ├── micropki/
 │   ├── __init__.py
@@ -369,3 +371,4 @@ PythonProjectMicroPKI/
 ├── setup.py
 ├── pyproject.toml
 └── README.md
+~~
