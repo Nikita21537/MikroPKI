@@ -135,7 +135,117 @@ PythonProjectMicroPKI/
 - **Certificate Templates**: Шаблоны для сертификатов server, client, code_signing
 - **Subject Alternative Names (SAN)**: Поддержка DNS, IP, email, URI
 - **Chain Validation**: Проверка цепочек сертификатов
+## Требования
 
+- Python 3.8 или выше
+- Зависимости указаны в requirements.txt
+
+## Установка
+
+### 1. Клонирование репозитория
+
+
+git clone <url-репозитория>
+cd PythonProjectMicroPKI
+2. Создание виртуальной среды
+
+python -m venv venv
+Активация виртуального окружения:
+
+Windows: venv\Scripts\activate
+
+macOS/Linux: source venv/bin/activate
+
+3. Установка зависимостей
+
+pip install -r requirements.txt
+4. Установка пакета в режиме разработки
+
+pip install -e .
+Использование
+Подготовка паролей
+Создайте файлы с паролями для защиты закрытых ключей:
+
+
+# Для корневого CA
+echo "root_secure_passphrase_123" > secrets/root.pass
+
+# Для промежуточного CA
+echo "intermediate_secure_passphrase_456" > secrets/intermediate.pass
+1. Создание корневого CA
+RSA 4096 (рекомендуется для максимальной совместимости):
+
+
+micropki ca init \
+    --subject "CN=MicroPKI Root CA,O=MicroPKI,C=RU" \
+    --key-type rsa \
+    --key-size 4096 \
+    --passphrase-file secrets/root.pass \
+    --out-dir ./pki \
+    --validity-days 3650
+ECC P-384 (более производительный):
+
+bash
+micropki ca init \
+    --subject "CN=MicroPKI ECC Root CA,O=MicroPKI,C=RU" \
+    --key-type ecc \
+    --key-size 384 \
+    --passphrase-file secrets/root.pass \
+    --out-dir ./pki \
+    --validity-days 3650
+2. Создание промежуточного CA
+bash
+micropki ca issue-intermediate \
+    --root-cert ./pki/certs/ca.cert.pem \
+    --root-key ./pki/private/ca.key.pem \
+    --root-pass-file secrets/root.pass \
+    --subject "CN=MicroPKI Intermediate CA,O=MicroPKI,C=RU" \
+    --key-type rsa \
+    --passphrase-file secrets/intermediate.pass \
+    --out-dir ./pki \
+    --validity-days 1825 \
+    --pathlen 0
+3. Выпуск сертификатов
+Серверный сертификат (для HTTPS/TLS)
+bash
+micropki ca issue-cert \
+    --ca-cert ./pki/certs/intermediate.cert.pem \
+    --ca-key ./pki/private/intermediate.key.pem \
+    --ca-pass-file secrets/intermediate.pass \
+    --template server \
+    --subject "CN=example.com,O=MicroPKI,C=RU" \
+    --san dns:example.com \
+    --san dns:www.example.com \
+    --san ip:192.168.1.10 \
+    --out-dir ./pki/certs \
+    --validity-days 365
+Клиентский сертификат (для аутентификации)
+bash
+micropki ca issue-cert \
+    --ca-cert ./pki/certs/intermediate.cert.pem \
+    --ca-key ./pki/private/intermediate.key.pem \
+    --ca-pass-file secrets/intermediate.pass \
+    --template client \
+    --subject "CN=Alice Smith,EMAIL=alice@example.com,O=MicroPKI" \
+    --san email:alice@example.com \
+    --out-dir ./pki/certs \
+    --validity-days 365
+Сертификат для подписи кода
+bash
+micropki ca issue-cert \
+    --ca-cert ./pki/certs/intermediate.cert.pem \
+    --ca-key ./pki/private/intermediate.key.pem \
+    --ca-pass-file secrets/intermediate.pass \
+    --template code_signing \
+    --subject "CN=MicroPKI Code Signer,O=MicroPKI" \
+    --out-dir ./pki/certs \
+    --validity-days 365
+4. Проверка цепочки сертификатов
+bash
+micropki verify \
+    --leaf ./pki/certs/example.com.cert.pem \
+    --intermediate ./pki/certs/intermediate.cert.pem \
+    --root ./pki/certs/ca.cert.pem
 ## Использование
 
 ### 1. Создание Root CA
@@ -200,7 +310,7 @@ micropki verify \
     --intermediate ./pki/certs/intermediate.cert.pem \
     --root ./pki/certs/ca.cert.pem
 Структура директорий
-text
+
 pki/
 ├── private/
 │   ├── ca.key.pem               # Зашифрованный ключ Root CA
@@ -221,11 +331,10 @@ pytest ≥ 7.0.0 (для тестирования)
 Лицензия
 MIT
 
-text
+
 
 ## Установка и тестирование
 
-```bash
 # Установка зависимостей
 pip install cryptography
 
@@ -234,3 +343,28 @@ pytest tests/ -v
 
 # Проверка цепочки сертификатов с OpenSSL
 openssl verify -CAfile pki/certs/ca.cert.pem -untrusted pki/certs/intermediate.cert.pem pki/certs/example.com.cert.pem
+# Архитектура
+PythonProjectMicroPKI/
+├── micropki/
+│   ├── __init__.py
+│   ├── __main__.py
+│   ├── ca.py              # Root CA
+│   ├── certificates.py    # Работа с сертификатами
+│   ├── chain.py           # Проверка цепочек
+│   ├── cli.py             # CLI интерфейс
+│   ├── crypto_utils.py    # Криптографические утилиты
+│   ├── csr.py             # CSR обработка
+│   ├── intermediate.py    # Intermediate CA
+│   ├── logger.py          # Логирование
+│   └── templates.py       # Шаблоны сертификатов
+├── tests/
+│   ├── __init__.py
+│   ├── test_ca.py
+│   ├── test_crypto_utils.py
+│   ├── test_csr.py
+│   ├── test_templates.py
+│   └── test_chain.py
+├── requirements.txt
+├── setup.py
+├── pyproject.toml
+└── README.md
