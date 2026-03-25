@@ -225,3 +225,19 @@ def verify_certificate(cert_path: Path) -> bool:
         return True
     except Exception:
         return False
+
+
+def load_certificate(cert_path: Path) -> x509.Certificate:
+    """
+    Load certificate from PEM file.
+
+    Args:
+        cert_path: Path to certificate file
+
+    Returns:
+        X.509 certificate
+    """
+    with open(cert_path, 'rb') as f:
+        cert_data = f.read()
+
+    return x509.load_pem_x509_certificate(cert_data, default_backend())

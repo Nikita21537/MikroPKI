@@ -17,13 +17,15 @@ def generate_rsa_key(key_size: int = 4096) -> rsa.RSAPrivateKey:
     Generate an RSA private key.
 
     Args:
-        key_size: Key size in bits (must be 4096 for this implementation)
+        key_size: Key size in bits
+                 - 4096 для CA (Root и Intermediate)
+                 - 2048 для end-entity сертификатов
 
     Returns:
         RSA private key
     """
-    if key_size != 4096:
-        raise ValueError("RSA key size must be 4096 bits")
+    if key_size not in [2048, 4096]:
+        raise ValueError("RSA key size must be 2048 or 4096 bits")
 
     return rsa.generate_private_key(
         public_exponent=65537,
@@ -34,19 +36,25 @@ def generate_rsa_key(key_size: int = 4096) -> rsa.RSAPrivateKey:
 
 def generate_ecc_key(key_size: int = 384) -> ec.EllipticCurvePrivateKey:
     """
-    Generate an ECC private key on P-384 curve.
+    Generate an ECC private key.
 
     Args:
-        key_size: Key size (must be 384 for P-384 curve)
+        key_size: Key size
+                 - 384 для P-384 (CA)
+                 - 256 для P-256 (end-entity)
 
     Returns:
         ECC private key
     """
-    if key_size != 384:
-        raise ValueError("ECC key size must be 384 bits (P-384 curve)")
+    if key_size == 384:
+        curve = ec.SECP384R1()
+    elif key_size == 256:
+        curve = ec.SECP256R1()
+    else:
+        raise ValueError("ECC key size must be 256 or 384 bits")
 
     return ec.generate_private_key(
-        curve=ec.SECP384R1(),
+        curve=curve,
         backend=default_backend()
     )
 

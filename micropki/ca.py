@@ -43,6 +43,12 @@ class RootCA:
         """
         self.logger.info(f"Starting Root CA initialization for subject: {subject}")
 
+        # Validate key size for Root CA
+        if key_type == "rsa" and key_size != 4096:
+            raise ValueError("RSA key size for Root CA must be 4096 bits")
+        if key_type == "ecc" and key_size != 384:
+            raise ValueError("ECC key size for Root CA must be 384 bits (P-384)")
+
         try:
             # Load passphrase
             self.logger.info("Loading passphrase from file")
@@ -114,9 +120,9 @@ class RootCA:
             key_type: str,
             key_size: int
     ) -> None:
-        # Use UTC methods to avoid deprecation warnings
-        not_before = certificate.not_valid_before_utc
-        not_after = certificate.not_valid_after_utc
+        # Use standard attributes
+        not_before = certificate.not_valid_before
+        not_after = certificate.not_valid_after
 
         policy_content = f"""Certificate Policy Document - MicroPKI Root CA
 
