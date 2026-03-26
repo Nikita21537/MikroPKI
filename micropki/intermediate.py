@@ -1,8 +1,8 @@
-"""Intermediate CA management."""
-
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Union, List, Tuple
+
+
 
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization, hashes
@@ -15,16 +15,10 @@ from .logger import setup_logger
 
 
 class IntermediateCA:
-    """Intermediate Certificate Authority implementation."""
+
 
     def __init__(self, out_dir: str, log_file: Optional[str] = None):
-        """
-        Initialize Intermediate CA.
 
-        Args:
-            out_dir: Output directory for CA files
-            log_file: Optional log file path
-        """
         self.out_dir = Path(out_dir)
         self.private_dir = self.out_dir / "private"
         self.certs_dir = self.out_dir / "certs"
@@ -42,51 +36,35 @@ class IntermediateCA:
         validity_days: int,
         pathlen: int
     ) -> None:
-        """
-        Create an Intermediate CA signed by the Root CA.
 
-        Args:
-            root_cert_path: Path to Root CA certificate
-            root_key_path: Path to Root CA private key
-            root_pass_file: Path to Root CA passphrase file
-            subject_dn: Distinguished Name for Intermediate CA
-            key_type: 'rsa' or 'ecc'
-            passphrase_file: Passphrase for Intermediate CA private key
-            validity_days: Validity period in days
-            pathlen: Path length constraint
-        """
         self.logger.info(f"Creating Intermediate CA with subject: {subject_dn}")
 
         try:
-            # Load Root CA certificate and key
+
             self.logger.info("Loading Root CA certificate and key")
             root_cert = certificates.load_certificate(root_cert_path)
             root_pass = crypto_utils.load_passphrase(root_pass_file)
             root_key = crypto_utils.load_encrypted_private_key(root_key_path, root_pass)
 
-            # Generate Intermediate CA key pair
             self.logger.info(f"Generating {key_type.upper()} key pair for Intermediate CA")
             if key_type == "rsa":
                 inter_key = crypto_utils.generate_rsa_key(4096)
             else:
                 inter_key = crypto_utils.generate_ecc_key(384)
 
-            # Generate CSR for Intermediate CA
             self.logger.info("Generating CSR for Intermediate CA")
             inter_csr = csr_module.generate_csr(
                 private_key=inter_key,
                 subject_dn=subject_dn,
-                template_name="server",  # Placeholder
+                template_name="server",
                 san_list=None,
                 pathlen=pathlen
             )
 
-            # Save CSR (optional)
             csr_path = self.csrs_dir / "intermediate.csr.pem"
             csr_module.save_csr(inter_csr, csr_path)
             self.logger.info(f"CSR saved to: {csr_path.absolute()}")
 
-            # Sign CSR with Root CA to create Intermediate certificate
             self.logger.info("Signing Intermediate CSR with Root CA")
             inter_cert = self._sign_intermediate_certificate(
                 csr=inter_csr,
@@ -96,11 +74,9 @@ class IntermediateCA:
                 pathlen=pathlen
             )
 
-            # Generate serial number
             serial_number = crypto_utils.generate_serial_number()
             self.logger.info(f"Generated serial number: {hex(serial_number)}")
 
-            # Save Intermediate CA private key (encrypted)
             self.logger.info("Encrypting and saving Intermediate CA private key")
             inter_pass = crypto_utils.load_passphrase(passphrase_file)
             encrypted_key = crypto_utils.encrypt_private_key(inter_key, inter_pass)
@@ -108,13 +84,11 @@ class IntermediateCA:
             crypto_utils.save_private_key(encrypted_key, key_path)
             self.logger.info(f"Private key saved to: {key_path.absolute()}")
 
-            # Save Intermediate CA certificate
             self.logger.info("Saving Intermediate CA certificate")
             cert_path = self.certs_dir / "intermediate.cert.pem"
             certificates.save_certificate(inter_cert, cert_path)
             self.logger.info(f"Certificate saved to: {cert_path.absolute()}")
 
-            # Update policy document
             self.logger.info("Updating policy document")
             self._update_policy_document(
                 subject=subject_dn,
@@ -139,17 +113,12 @@ class IntermediateCA:
         validity_days: int,
         pathlen: int
     ) -> x509.Certificate:
-        """Sign Intermediate CSR with Root CA."""
-        from .certificates import parse_dn_string
 
-        # Generate serial number
         serial_number = crypto_utils.generate_serial_number()
 
-        # Set validity period
         not_valid_before = datetime.now(timezone.utc).replace(tzinfo=None)
         not_valid_after = not_valid_before + timedelta(days=validity_days)
 
-        # Build certificate
         builder = x509.CertificateBuilder()
         builder = builder.subject_name(csr.subject)
         builder = builder.issuer_name(issuer_cert.subject)
@@ -158,14 +127,11 @@ class IntermediateCA:
         builder = builder.serial_number(serial_number)
         builder = builder.public_key(csr.public_key())
 
-        # Add extensions
-        # Basic Constraints: CA=TRUE
         builder = builder.add_extension(
             x509.BasicConstraints(ca=True, path_length=pathlen),
             critical=True
         )
 
-        # Key Usage: keyCertSign and cRLSign
         builder = builder.add_extension(
             x509.KeyUsage(
                 digital_signature=False,
@@ -181,15 +147,12 @@ class IntermediateCA:
             critical=True
         )
 
-        # Subject Key Identifier
         ski = x509.SubjectKeyIdentifier.from_public_key(csr.public_key())
         builder = builder.add_extension(ski, critical=False)
 
-        # Authority Key Identifier (from issuer)
         aki = x509.AuthorityKeyIdentifier.from_issuer_public_key(issuer_cert.public_key())
         builder = builder.add_extension(aki, critical=False)
 
-        # Sign the certificate
         if isinstance(issuer_key, rsa.RSAPrivateKey):
             certificate = builder.sign(issuer_key, hashes.SHA256(), default_backend())
         else:
@@ -237,7 +200,6 @@ Certificate Extensions:
 
 
 class IssueCertificate:
-    """End-entity certificate issuance."""
 
     def __init__(self, log_file: Optional[str] = None):
         self.logger = setup_logger(log_file)
@@ -254,21 +216,15 @@ class IssueCertificate:
         validity_days: int,
         csr_path: Optional[Path] = None
     ) -> Tuple[Path, Optional[Path]]:
-        """
-        Issue an end-entity certificate.
 
-        Returns:
-            Tuple of (cert_path, key_path) where key_path is None if CSR was used
-        """
         self.logger.info(f"Issuing {template_name} certificate for subject: {subject_dn}")
 
         try:
-            # Load CA certificate and key
+
             ca_cert = certificates.load_certificate(ca_cert_path)
             ca_pass = crypto_utils.load_passphrase(ca_pass_file)
             ca_key = crypto_utils.load_encrypted_private_key(ca_key_path, ca_pass)
 
-            # Generate or load key pair
             if csr_path:
                 self.logger.info(f"Loading CSR from {csr_path}")
                 csr_obj = csr_module.load_csr(csr_path)
@@ -282,14 +238,13 @@ class IssueCertificate:
                 self.logger.info(f"CSR loaded: {csr_info}")
             else:
                 self.logger.info("Generating new key pair")
-                # Use appropriate key type based on CA
+
                 if isinstance(ca_key, rsa.RSAPrivateKey):
                     private_key = crypto_utils.generate_rsa_key(2048)
                 else:
                     private_key = crypto_utils.generate_ecc_key(256)
                 public_key = private_key.public_key()
 
-            # Build certificate
             certificate = self._build_certificate(
                 public_key=public_key,
                 subject_dn=subject_dn,
@@ -300,7 +255,6 @@ class IssueCertificate:
                 validity_days=validity_days
             )
 
-            # Generate filename from CN
             from .certificates import parse_dn_string
             subject = parse_dn_string(subject_dn)
             common_name = None
@@ -312,14 +266,11 @@ class IssueCertificate:
             if not common_name:
                 common_name = "cert"
 
-            # Sanitize filename
             filename = common_name.replace(' ', '_').replace('/', '_')
 
-            # Save certificate
             cert_path = out_dir / f"{filename}.cert.pem"
             certificates.save_certificate(certificate, cert_path)
 
-            # Save private key if generated
             key_path = None
             if private_key:
                 key_path = out_dir / f"{filename}.key.pem"
@@ -337,7 +288,6 @@ class IssueCertificate:
                     pass
 
 
-            # Log issuance
             self.logger.info(f"Certificate issued: serial={hex(certificate.serial_number)}, "
                            f"template={template_name}, subject={subject_dn}, sans={san_list}")
 
@@ -357,24 +307,19 @@ class IssueCertificate:
         san_list: List[str],
         validity_days: int
     ) -> x509.Certificate:
-        """Build and sign certificate."""
+
         from .certificates import parse_dn_string
         from .templates import get_template
 
-        # Parse subject
         subject = parse_dn_string(subject_dn)
 
-        # Get template
         template = get_template(template_name)
 
-        # Generate serial number
         serial_number = crypto_utils.generate_serial_number()
 
-        # Set validity period
         not_valid_before = datetime.now(timezone.utc).replace(tzinfo=None)
         not_valid_after = not_valid_before + timedelta(days=validity_days)
 
-        # Build certificate
         builder = x509.CertificateBuilder()
         builder = builder.subject_name(subject)
         builder = builder.issuer_name(issuer_cert.subject)
@@ -383,25 +328,20 @@ class IssueCertificate:
         builder = builder.serial_number(serial_number)
         builder = builder.public_key(public_key)
 
-        # Add extensions from template
         builder = builder.add_extension(template.get_basic_constraints(), critical=True)
         builder = builder.add_extension(template.get_key_usage(), critical=True)
         builder = builder.add_extension(template.get_extended_key_usage(), critical=False)
 
-        # Add SAN extension if provided
         if san_list:
             san_ext = templates.build_san_extension(san_list, template_name)
             builder = builder.add_extension(san_ext, critical=False)
 
-        # Add Subject Key Identifier
         ski = x509.SubjectKeyIdentifier.from_public_key(public_key)
         builder = builder.add_extension(ski, critical=False)
 
-        # Add Authority Key Identifier
         aki = x509.AuthorityKeyIdentifier.from_issuer_public_key(issuer_cert.public_key())
         builder = builder.add_extension(aki, critical=False)
 
-        # Sign the certificate
         if isinstance(issuer_key, rsa.RSAPrivateKey):
             certificate = builder.sign(issuer_key, hashes.SHA256(), default_backend())
         else:
