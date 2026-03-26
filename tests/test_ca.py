@@ -1,5 +1,3 @@
-"""Tests for CA functionality."""
-
 import pytest
 import tempfile
 import shutil
@@ -11,7 +9,7 @@ from micropki.crypto_utils import load_passphrase, load_encrypted_private_key, v
 
 @pytest.fixture
 def temp_dir():
-    """Create a temporary directory for testing."""
+
     path = Path(tempfile.mkdtemp())
     yield path
     shutil.rmtree(path)
@@ -19,14 +17,14 @@ def temp_dir():
 
 @pytest.fixture
 def passphrase_file(temp_dir):
-    """Create a passphrase file."""
+
     pass_file = temp_dir / "pass.txt"
     pass_file.write_text("testpassphrase\n")
     return pass_file
 
 
 def test_ca_initialization_rsa(temp_dir, passphrase_file):
-    """Test RSA CA initialization."""
+
     ca = RootCA(str(temp_dir / "pki"))
     ca.init_ca(
         subject="/CN=Test Root CA/O=Testing",
@@ -36,18 +34,18 @@ def test_ca_initialization_rsa(temp_dir, passphrase_file):
         validity_days=365
     )
 
-    # Check files were created
+
     assert (temp_dir / "pki/private/ca.key.pem").exists()
     assert (temp_dir / "pki/certs/ca.cert.pem").exists()
     assert (temp_dir / "pki/policy.txt").exists()
 
-    # Verify certificate
+
     cert_path = temp_dir / "pki/certs/ca.cert.pem"
     assert verify_certificate(cert_path) is True
 
 
 def test_ca_initialization_ecc(temp_dir, passphrase_file):
-    """Test ECC CA initialization."""
+
     ca = RootCA(str(temp_dir / "pki"))
     ca.init_ca(
         subject="CN=Test ECC Root CA,O=Testing",
@@ -57,18 +55,18 @@ def test_ca_initialization_ecc(temp_dir, passphrase_file):
         validity_days=365
     )
 
-    # Check files were created
+
     assert (temp_dir / "pki/private/ca.key.pem").exists()
     assert (temp_dir / "pki/certs/ca.cert.pem").exists()
     assert (temp_dir / "pki/policy.txt").exists()
 
-    # Verify certificate
+
     cert_path = temp_dir / "pki/certs/ca.cert.pem"
     assert verify_certificate(cert_path) is True
 
 
 def test_key_and_certificate_match(temp_dir, passphrase_file):
-    """Test that private key matches certificate."""
+
     ca = RootCA(str(temp_dir / "pki"))
     ca.init_ca(
         subject="/CN=Test Root CA",
@@ -78,27 +76,27 @@ def test_key_and_certificate_match(temp_dir, passphrase_file):
         validity_days=365
     )
 
-    # Load and decrypt key, then verify against cert
+
     cert_path = temp_dir / "pki/certs/ca.cert.pem"
     key_path = temp_dir / "pki/private/ca.key.pem"
     passphrase = load_passphrase(passphrase_file)
 
-    # Load certificate
+
     with open(cert_path, 'rb') as f:
         cert_data = f.read()
     from cryptography import x509
     from cryptography.hazmat.backends import default_backend
     certificate = x509.load_pem_x509_certificate(cert_data, default_backend())
 
-    # Load and decrypt private key
+
     private_key = load_encrypted_private_key(key_path, passphrase)
 
-    # Verify key pair
+
     assert verify_key_pair(private_key, certificate.public_key()) is True
 
 
 def test_encrypted_key_loading(temp_dir, passphrase_file):
-    """Test that encrypted private key can be loaded and decrypted."""
+
     ca = RootCA(str(temp_dir / "pki"))
     ca.init_ca(
         subject="/CN=Test Root CA",
@@ -118,10 +116,10 @@ def test_encrypted_key_loading(temp_dir, passphrase_file):
 
 
 def test_ca_initialization_invalid_key_size(temp_dir, passphrase_file):
-    """Test CA initialization with invalid key size."""
+
     ca = RootCA(str(temp_dir / "pki"))
 
-    # RSA with wrong size (2048 is not allowed for Root CA)
+
     with pytest.raises(ValueError, match="RSA key size for Root CA must be 4096 bits"):
         ca.init_ca(
             subject="/CN=Test",
@@ -131,7 +129,7 @@ def test_ca_initialization_invalid_key_size(temp_dir, passphrase_file):
             validity_days=365
         )
 
-    # RSA with invalid size (1024)
+
     with pytest.raises(ValueError, match="RSA key size for Root CA must be 4096 bits"):
         ca.init_ca(
             subject="/CN=Test",
@@ -141,7 +139,7 @@ def test_ca_initialization_invalid_key_size(temp_dir, passphrase_file):
             validity_days=365
         )
 
-    # ECC with wrong size (256 is not allowed for Root CA)
+
     with pytest.raises(ValueError, match="ECC key size for Root CA must be 384 bits"):
         ca.init_ca(
             subject="/CN=Test",
@@ -151,7 +149,7 @@ def test_ca_initialization_invalid_key_size(temp_dir, passphrase_file):
             validity_days=365
         )
 
-    # ECC with invalid size (521)
+
     with pytest.raises(ValueError, match="ECC key size for Root CA must be 384 bits"):
         ca.init_ca(
             subject="/CN=Test",
