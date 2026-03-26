@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Union, Optional
 
 
+
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa, ec, padding
@@ -177,10 +178,6 @@ def verify_certificate(cert_path: Path) -> bool:
 
 def load_certificate(cert_path: Path) -> x509.Certificate:
 
-    with open(cert_path, 'rb') as f:
-        cert_data = f.read()
-
-    return x509.load_pem_x509_certificate(cert_data, default_backend())
     with open(cert_path, 'rb') as f:
         cert_data = f.read()
 
