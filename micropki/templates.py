@@ -1,7 +1,8 @@
-"""Certificate template management."""
-
 from typing import List, Optional
 from ipaddress import ip_address
+
+
+
 
 from cryptography import x509
 from cryptography.x509.oid import ExtendedKeyUsageOID
@@ -10,30 +11,30 @@ from cryptography.hazmat.primitives.asymmetric import rsa, ec
 
 
 class CertificateTemplate:
-    """Base class for certificate templates."""
+
 
     def __init__(self, name: str):
         self.name = name
 
     def get_key_usage(self) -> x509.KeyUsage:
-        """Get KeyUsage extension for the template."""
+
         raise NotImplementedError
 
     def get_extended_key_usage(self) -> x509.ExtendedKeyUsage:
-        """Get ExtendedKeyUsage extension for the template."""
+
         raise NotImplementedError
 
     def validate_sans(self, san_list: List[str]) -> None:
-        """Validate SAN entries for the template."""
+
         pass
 
     def get_basic_constraints(self) -> x509.BasicConstraints:
-        """Get BasicConstraints extension (CA=FALSE for all end-entity certs)."""
+
         return x509.BasicConstraints(ca=False, path_length=None)
 
 
 class ServerTemplate(CertificateTemplate):
-    """Server certificate template."""
+
 
     def __init__(self):
         super().__init__("server")
@@ -55,7 +56,7 @@ class ServerTemplate(CertificateTemplate):
         return x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH])
 
     def validate_sans(self, san_list: List[str]) -> None:
-        """Validate that server certificate has at least one DNS or IP SAN."""
+
         if not san_list:
             raise ValueError("Server certificate must have at least one SAN (DNS or IP)")
 
@@ -71,7 +72,7 @@ class ServerTemplate(CertificateTemplate):
 
 
 class ClientTemplate(CertificateTemplate):
-    """Client certificate template."""
+
 
     def __init__(self):
         super().__init__("client")
@@ -93,7 +94,7 @@ class ClientTemplate(CertificateTemplate):
         return x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH])
 
     def validate_sans(self, san_list: List[str]) -> None:
-        """Validate SAN entries for client certificate."""
+
         for san in san_list:
             san_type = san.split(':')[0]
             if san_type not in ['dns', 'email']:
@@ -123,7 +124,7 @@ class CodeSigningTemplate(CertificateTemplate):
         return x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CODE_SIGNING])
 
     def validate_sans(self, san_list: List[str]) -> None:
-        """Validate SAN entries for code signing certificate."""
+
         for san in san_list:
             san_type = san.split(':')[0]
             if san_type not in ['dns', 'uri']:
@@ -131,18 +132,7 @@ class CodeSigningTemplate(CertificateTemplate):
 
 
 def get_template(template_name: str) -> CertificateTemplate:
-    """
-    Get certificate template by name.
 
-    Args:
-        template_name: Template name (server, client, code_signing)
-
-    Returns:
-        CertificateTemplate instance
-
-    Raises:
-        ValueError: If template name is invalid
-    """
     templates = {
         'server': ServerTemplate,
         'client': ClientTemplate,
@@ -156,20 +146,7 @@ def get_template(template_name: str) -> CertificateTemplate:
 
 
 def build_san_extension(san_list: List[str], template_name: str) -> x509.SubjectAlternativeName:
-    """
-    Build SubjectAlternativeName extension from SAN list.
 
-    Args:
-        san_list: List of SAN strings in format type:value
-        template_name: Template name for validation
-
-    Returns:
-        SubjectAlternativeName extension
-
-    Raises:
-        ValueError: If SAN format is invalid or not allowed for template
-    """
-    from .certificates import parse_dn_string
 
     general_names = []
 
@@ -194,7 +171,7 @@ def build_san_extension(san_list: List[str], template_name: str) -> x509.Subject
         else:
             raise ValueError(f"Unsupported SAN type: {san_type}. Supported: dns, ip, email, uri")
 
-    # Validate against template requirements
+
     template = get_template(template_name)
     template.validate_sans(san_list)
 
