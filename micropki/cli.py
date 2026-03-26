@@ -1,8 +1,7 @@
-"""Command-line interface for MicroPKI."""
-
 import argparse
 import sys
 from pathlib import Path
+
 
 from . import __version__
 from .ca import RootCA
@@ -13,10 +12,8 @@ from .chain import ChainValidator
 
 
 def validate_issue_intermediate_args(args):
-    """Validate arguments for issue-intermediate command."""
     errors = []
 
-    # Check file paths
     for file_path, name in [
         (args.root_cert, "root-cert"),
         (args.root_key, "root-key"),
@@ -29,19 +26,15 @@ def validate_issue_intermediate_args(args):
         elif not path.is_file():
             errors.append(f"{name} path is not a file: {file_path}")
 
-    # Validate subject
     if not args.subject:
         errors.append("--subject is required and must be non-empty")
 
-    # Validate key type
     if args.key_type not in ['rsa', 'ecc']:
         errors.append(f"--key-type must be 'rsa' or 'ecc', got '{args.key_type}'")
 
-    # Validate validity days
     if args.validity_days <= 0:
         errors.append(f"--validity-days must be positive, got {args.validity_days}")
 
-    # Validate pathlen
     if args.pathlen < 0:
         errors.append(f"--pathlen must be >= 0, got {args.pathlen}")
 
@@ -49,10 +42,8 @@ def validate_issue_intermediate_args(args):
 
 
 def validate_issue_cert_args(args):
-    """Validate arguments for issue-cert command."""
     errors = []
 
-    # Check file paths
     for file_path, name in [
         (args.ca_cert, "ca-cert"),
         (args.ca_key, "ca-key"),
@@ -64,21 +55,17 @@ def validate_issue_cert_args(args):
         elif not path.is_file():
             errors.append(f"{name} path is not a file: {file_path}")
 
-    # Validate template
     if args.template not in ['server', 'client', 'code_signing']:
         errors.append(
             f"--template must be server, client, or code_signing, got '{args.template}'"
         )
 
-    # Validate subject
     if not args.subject:
         errors.append("--subject is required and must be non-empty")
 
-    # Validate validity days
     if args.validity_days <= 0:
         errors.append(f"--validity-days must be positive, got {args.validity_days}")
 
-    # Validate SANs for server certificate
     if args.template == 'server' and not args.san:
         errors.append("Server certificate requires at least one SAN (--san dns:... or ip:...)")
 
@@ -86,14 +73,12 @@ def validate_issue_cert_args(args):
 
 
 def parse_san_args(san_list):
-    """Parse SAN arguments from CLI."""
     if not san_list:
         return []
     return san_list
 
 
 def main():
-    """Main entry point for the CLI."""
     parser = argparse.ArgumentParser(
         description="MicroPKI - Minimal Public Key Infrastructure",
         formatter_class=argparse.RawDescriptionHelpFormatter
@@ -114,7 +99,6 @@ def main():
         help="Available commands"
     )
 
-    # CA operations subcommand
     ca_parser = subparsers.add_parser(
         "ca",
         help="Certificate Authority operations"
@@ -163,7 +147,6 @@ def main():
         help="Validity period in days (default: 3650)"
     )
 
-    # Issue Intermediate CA (Sprint 2)
     issue_intermediate_parser = ca_subparsers.add_parser(
         "issue-intermediate",
         help="Create an Intermediate CA signed by the Root CA"
@@ -217,7 +200,6 @@ def main():
         help="Path length constraint (default: 0)"
     )
 
-    # Issue Certificate (Sprint 2)
     issue_cert_parser = ca_subparsers.add_parser(
         "issue-cert",
         help="Issue an end-entity certificate"
@@ -293,16 +275,13 @@ def main():
 
     args = parser.parse_args()
 
-    # Handle commands
     if not args.command:
         parser.print_help()
         sys.exit(1)
 
     if args.command == "ca":
         if args.ca_command == "init":
-            # Sprint 1 logic (simplified)
             from .cli import main as old_main
-            # For brevity, this would call existing init logic
             pass
 
         elif args.ca_command == "issue-intermediate":
@@ -340,10 +319,8 @@ def main():
                 from .intermediate import IssueCertificate
                 issuer = IssueCertificate(args.log_file)
 
-                # Parse SANs if provided
                 san_list = parse_san_args(args.san) if args.san else []
 
-                # Issue certificate
                 cert_path, key_path = issuer.issue_certificate(
                     ca_cert_path=Path(args.ca_cert),
                     ca_key_path=Path(args.ca_key),
