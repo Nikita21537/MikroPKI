@@ -1,5 +1,3 @@
-"""Tests for CSR handling."""
-
 import pytest
 import tempfile
 import shutil
@@ -10,18 +8,17 @@ from micropki import crypto_utils, csr
 
 @pytest.fixture
 def temp_dir():
-    """Create temporary directory."""
+
     path = Path(tempfile.mkdtemp())
     yield path
     shutil.rmtree(path)
 
 
 def test_generate_csr(temp_dir):
-    """Test CSR generation."""
-    # Generate key (2048 for end-entity)
+
     private_key = crypto_utils.generate_rsa_key(2048)
 
-    # Generate CSR
+
     csr_obj = csr.generate_csr(
         private_key=private_key,
         subject_dn="CN=Test,O=Org",
@@ -30,17 +27,15 @@ def test_generate_csr(temp_dir):
     )
 
     assert csr_obj is not None
-    # Check that attributes are present (order may vary)
+
     subject_str = csr_obj.subject.rfc4514_string()
     assert "CN=Test" in subject_str
     assert "O=Org" in subject_str
 
-    # Save and load CSR
     csr_path = temp_dir / "test.csr.pem"
     csr.save_csr(csr_obj, csr_path)
     assert csr_path.exists()
 
-    # Try to load (skip if not supported)
     try:
         loaded_csr = csr.load_csr(csr_path)
         assert loaded_csr is not None
@@ -50,10 +45,9 @@ def test_generate_csr(temp_dir):
 
 
 def test_csr_with_sans(temp_dir):
-    """Test CSR with SAN extensions."""
+
     private_key = crypto_utils.generate_rsa_key(2048)
 
-    # For server use only dns and ip
     csr_obj = csr.generate_csr(
         private_key=private_key,
         subject_dn="CN=Test",
@@ -61,7 +55,6 @@ def test_csr_with_sans(temp_dir):
         san_list=["dns:example.com", "ip:192.168.1.1"]
     )
 
-    # Check SAN extension
     san_ext = None
     for ext in csr_obj.extensions:
         if ext.oid.dotted_string == "2.5.29.17":  # SAN OID
@@ -71,7 +64,6 @@ def test_csr_with_sans(temp_dir):
     assert san_ext is not None
     assert len(san_ext.value) == 2
 
-    # Verify SAN types
     has_dns = False
     has_ip = False
     for san in san_ext.value:
@@ -87,7 +79,7 @@ def test_csr_with_sans(temp_dir):
 
 
 def test_csr_for_client(temp_dir):
-    """Test CSR generation for client certificate."""
+
     private_key = crypto_utils.generate_rsa_key(2048)
 
     # Client supports email and dns
@@ -98,7 +90,6 @@ def test_csr_for_client(temp_dir):
         san_list=["email:user@example.com", "dns:client.local"]
     )
 
-    # Check SAN extension
     san_ext = None
     for ext in csr_obj.extensions:
         if ext.oid.dotted_string == "2.5.29.17":
@@ -110,10 +101,9 @@ def test_csr_for_client(temp_dir):
 
 
 def test_csr_for_code_signing(temp_dir):
-    """Test CSR generation for code signing certificate."""
+
     private_key = crypto_utils.generate_rsa_key(2048)
 
-    # Code signing supports dns and uri
     csr_obj = csr.generate_csr(
         private_key=private_key,
         subject_dn="CN=CodeSigner",
@@ -121,7 +111,6 @@ def test_csr_for_code_signing(temp_dir):
         san_list=["dns:signer.local", "uri:https://example.com"]
     )
 
-    # Check SAN extension
     san_ext = None
     for ext in csr_obj.extensions:
         if ext.oid.dotted_string == "2.5.29.17":
@@ -133,7 +122,7 @@ def test_csr_for_code_signing(temp_dir):
 
 
 def test_csr_with_ca_constraints(temp_dir):
-    """Test CSR generation with CA constraints."""
+
     private_key = crypto_utils.generate_rsa_key(4096)
 
     csr_obj = csr.generate_csr(
@@ -144,7 +133,7 @@ def test_csr_with_ca_constraints(temp_dir):
         pathlen=2
     )
 
-    # Check Basic Constraints extension
+
     bc_ext = None
     for ext in csr_obj.extensions:
         if ext.oid.dotted_string == "2.5.29.19":  # Basic Constraints OID
