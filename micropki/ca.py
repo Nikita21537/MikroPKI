@@ -1,5 +1,3 @@
-"""Root CA initialization and management."""
-
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional
@@ -8,16 +6,10 @@ from . import crypto_utils, certificates, logger
 
 
 class RootCA:
-    """Root Certificate Authority implementation."""
+
 
     def __init__(self, out_dir: str, log_file: Optional[str] = None):
-        """
-        Initialize Root CA.
 
-        Args:
-            out_dir: Output directory for CA files
-            log_file: Optional log file path
-        """
         self.out_dir = Path(out_dir)
         self.private_dir = self.out_dir / "private"
         self.certs_dir = self.out_dir / "certs"
@@ -31,42 +23,33 @@ class RootCA:
             passphrase_file: str,
             validity_days: int
     ) -> None:
-        """
-        Initialize a new Root CA.
 
-        Args:
-            subject: Distinguished Name
-            key_type: 'rsa' or 'ecc'
-            key_size: Key size in bits
-            passphrase_file: Path to passphrase file
-            validity_days: Certificate validity in days
-        """
         self.logger.info(f"Starting Root CA initialization for subject: {subject}")
 
-        # Validate key size for Root CA
+
         if key_type == "rsa" and key_size != 4096:
             raise ValueError("RSA key size for Root CA must be 4096 bits")
         if key_type == "ecc" and key_size != 384:
             raise ValueError("ECC key size for Root CA must be 384 bits (P-384)")
 
         try:
-            # Load passphrase
+
             self.logger.info("Loading passphrase from file")
             passphrase = crypto_utils.load_passphrase(Path(passphrase_file))
 
-            # Generate key pair
+
             self.logger.info(f"Generating {key_type.upper()} key pair (size: {key_size})")
             if key_type == "rsa":
                 private_key = crypto_utils.generate_rsa_key(key_size)
-            else:  # ecc
+            else:
                 private_key = crypto_utils.generate_ecc_key(key_size)
             self.logger.info("Key generation completed successfully")
 
-            # Generate serial number
+
             serial_number = crypto_utils.generate_serial_number()
             self.logger.info(f"Generated serial number: {hex(serial_number)}")
 
-            # Create self-signed certificate
+
             self.logger.info("Creating self-signed certificate")
             certificate = certificates.create_self_signed_certificate(
                 private_key=private_key,
@@ -76,26 +59,26 @@ class RootCA:
             )
             self.logger.info("Certificate signing completed successfully")
 
-            # Save encrypted private key
+
             self.logger.info("Encrypting and saving private key")
             encrypted_key = crypto_utils.encrypt_private_key(private_key, passphrase)
             key_path = self.private_dir / "ca.key.pem"
             crypto_utils.save_private_key(encrypted_key, key_path)
             self.logger.info(f"Private key saved to: {key_path.absolute()}")
 
-            # Save certificate
+
             self.logger.info("Saving certificate")
             cert_path = self.certs_dir / "ca.cert.pem"
             certificates.save_certificate(certificate, cert_path)
             self.logger.info(f"Certificate saved to: {cert_path.absolute()}")
 
-            # Verify key pair
+
             self.logger.info("Verifying key pair consistency")
             if not crypto_utils.verify_key_pair(private_key, private_key.public_key()):
                 raise RuntimeError("Key pair verification failed")
             self.logger.info("Key pair verification successful")
 
-            # Generate policy document
+
             self.logger.info("Generating policy document")
             self._generate_policy_document(
                 subject=subject,
@@ -166,7 +149,7 @@ End of Policy Document
             f.write(policy_content)
 
     def _get_certificate_fingerprint(self, certificate) -> str:
-        """Get SHA-256 fingerprint of certificate."""
+
         from cryptography.hazmat.primitives import hashes
         fingerprint = certificate.fingerprint(hashes.SHA256())
         return ':'.join(format(b, '02x') for b in fingerprint).upper()
