@@ -372,3 +372,265 @@ PythonProjectMicroPKI/
 ├── pyproject.toml
 └── README.md
 ~~~~
+# MicroPKI - Minimal Public Key Infrastructure
+
+Минимальная инфраструктура открытых ключей для создания и управления удостоверяющими центрами.
+
+## Sprint 3 Features
+- **Certificate Database**: SQLite хранилище для всех выданных сертификатов
+- **Unique Serial Numbers**: Гарантированно уникальные 64-битные серийные номера
+- **HTTP Repository Server**: REST API для получения сертификатов
+- **Certificate Management**: CLI команды для просмотра и управления сертификатами
+
+## Быстрый старт
+
+### 1. Инициализация базы данных
+
+micropki db init --db-path ./pki/micropki.db
+2. Создание Root CA
+
+echo "securepass" > secrets/root.pass
+micropki ca init \
+    --subject "CN=My Root CA,O=Demo,C=RU" \
+    --passphrase-file secrets/root.pass \
+    --out-dir ./pki
+3. Создание Intermediate CA
+
+echo "intermediatepass" > secrets/intermediate.pass
+micropki ca issue-intermediate \
+    --root-cert ./pki/certs/ca.cert.pem \
+    --root-key ./pki/private/ca.key.pem \
+    --root-pass-file secrets/root.pass \
+    --subject "CN=Intermediate CA,O=Demo" \
+    --passphrase-file secrets/intermediate.pass \
+    --out-dir ./pki
+4. Выпуск сертификата (автоматически добавляется в БД)
+
+micropki ca issue-cert \
+    --ca-cert ./pki/certs/intermediate.cert.pem \
+    --ca-key ./pki/private/intermediate.key.pem \
+    --ca-pass-file secrets/intermediate.pass \
+    --template server \
+    --subject "CN=example.com" \
+    --san dns:example.com
+5. Просмотр сертификатов
+
+# Список всех сертификатов
+micropki ca list-certs --format table
+
+# Только валидные
+micropki ca list-certs --status valid --format json
+
+# Получить сертификат по серийному номеру
+micropki ca show-cert 2A7F1234... --format pem
+6. Запуск репозитория
+
+# Запуск HTTP сервера
+micropki repo serve --host 127.0.0.1 --port 8080
+
+# Проверка статуса
+micropki repo status --port 8080
+7. API запросы
+bash
+# Получить сертификат по серийному номеру
+curl http://localhost:8080/certificate/2A7F... --output cert.pem
+
+# Получить корневой сертификат
+curl http://localhost:8080/ca/root --output root.pem
+
+# Получить промежуточный сертификат
+curl http://localhost:8080/ca/intermediate --output intermediate.pem
+
+# CRL endpoint (заглушка)
+curl http://localhost:8080/crl
+# 501 Not Implemented
+Команды CLI
+Управление базой данных
+Команда	Описание
+db init --db-path PATH	Инициализация SQLite базы данных
+Управление сертификатами
+Команда	Описание
+ca list-certs [--status STATUS] [--format FORMAT]	Список сертификатов
+ca show-cert SERIAL [--format FORMAT]	Показать сертификат
+ca init	Создать Root CA
+ca issue-intermediate	Создать Intermediate CA
+ca issue-cert	Выпустить сертификат
+Репозиторий
+Команда	Описание
+repo serve [--host HOST] [--port PORT]	Запуск HTTP сервера
+repo status [--host HOST] [--port PORT]	Проверка статуса сервера
+Проверка цепочки
+Команда	Описание
+verify --leaf FILE --intermediate FILE --root FILE	Проверка цепочки сертификатов
+Структура базы данных
+sql
+CREATE TABLE certificates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    serial_hex TEXT UNIQUE NOT NULL,
+    subject TEXT NOT NULL,
+    issuer TEXT NOT NULL,
+    not_before TEXT NOT NULL,
+    not_after TEXT NOT NULL,
+    cert_pem TEXT NOT NULL,
+    status TEXT NOT NULL,
+    revocation_reason TEXT,
+    revocation_date TEXT,
+    created_at TEXT NOT NULL
+);
+API Endpoints
+Метод	Endpoint	Описание
+GET	/certificate/{serial}	Получить сертификат по серийному номеру
+GET	/ca/root	Получить корневой сертификат
+GET	/ca/intermediate	Получить промежуточный сертификат
+GET	/crl	CRL (заглушка - 501)
+GET	/health	Проверка здоровья сервера
+Тестирование Sprint 3
+bash
+# Запуск всех тестов
+pytest tests/ -v
+
+# Только тесты Sprint 3
+pytest tests/test_database.py tests/test_serial.py -v
+
+# Тестирование API (требуется запущенный сервер)
+pytest tests/test_repository.py -v
+Интеграционный тест
+bash
+# Полный цикл работы
+./demo_sprint3.sh
+Лицензия
+MIT
+
+
+
+## 9. Скрипт демонстрации (demo_sprint3.sh)
+
+
+
+set -e
+
+echo "=== MicroPKI Sprint 3 Demo ==="
+
+# Clean up
+rm -rf ./pki ./secrets
+mkdir -p secrets
+
+# Create passphrase files
+echo "rootpass123" > secrets/root.pass
+echo "intermediatepass456" > secrets/intermediate.pass
+
+# 1. Initialize database
+echo -e "\n1. Initializing database..."
+micropki db init --db-path ./pki/micropki.db
+
+# 2. Create Root CA
+echo -e "\n2. Creating Root CA..."
+micropki ca init \
+    --subject "CN=Demo Root CA,O=Demo,C=RU" \
+    --key-type rsa \
+    --key-size 4096 \
+    --passphrase-file secrets/root.pass \
+    --out-dir ./pki \
+    --validity-days 3650
+
+# 3. Create Intermediate CA
+echo -e "\n3. Creating Intermediate CA..."
+micropki ca issue-intermediate \
+    --root-cert ./pki/certs/ca.cert.pem \
+    --root-key ./pki/private/ca.key.pem \
+    --root-pass-file secrets/root.pass \
+    --subject "CN=Demo Intermediate CA,O=Demo" \
+    --key-type rsa \
+    --passphrase-file secrets/intermediate.pass \
+    --out-dir ./pki \
+    --validity-days 1825
+
+# 4. Issue server certificate
+echo -e "\n4. Issuing server certificate..."
+micropki ca issue-cert \
+    --ca-cert ./pki/certs/intermediate.cert.pem \
+    --ca-key ./pki/private/intermediate.key.pem \
+    --ca-pass-file secrets/intermediate.pass \
+    --template server \
+    --subject "CN=demo.example.com,O=Demo" \
+    --san dns:demo.example.com \
+    --san dns:www.demo.example.com \
+    --out-dir ./pki/certs \
+    --validity-days 365
+
+# 5. Issue client certificate
+echo -e "\n5. Issuing client certificate..."
+micropki ca issue-cert \
+    --ca-cert ./pki/certs/intermediate.cert.pem \
+    --ca-key ./pki/private/intermediate.key.pem \
+    --ca-pass-file secrets/intermediate.pass \
+    --template client \
+    --subject "CN=Alice Smith,EMAIL=alice@example.com" \
+    --san email:alice@example.com \
+    --out-dir ./pki/certs \
+    --validity-days 365
+
+# 6. List certificates
+echo -e "\n6. Listing all certificates:"
+micropki ca list-certs --format table
+
+# 7. Show certificate details
+echo -e "\n7. Showing certificate details:"
+SERIAL=$(micropki ca list-certs --format json | python3 -c "import sys,json; data=json.load(sys.stdin); print(data[0]['serial_hex'])" 2>/dev/null || echo "unknown")
+if [ "$SERIAL" != "unknown" ]; then
+    micropki ca show-cert "$SERIAL" --format text
+fi
+
+# 8. Start repository server in background
+echo -e "\n8. Starting repository server..."
+micropki repo serve --host 127.0.0.1 --port 8080 --db-path ./pki/micropki.db &
+SERVER_PID=$!
+sleep 2
+
+# 9. Test API endpoints
+echo -e "\n9. Testing API endpoints..."
+curl -s http://localhost:8080/health && echo " - Health OK"
+curl -s -o /tmp/root.pem http://localhost:8080/ca/root && echo " - Root CA downloaded"
+curl -s -o /tmp/intermediate.pem http://localhost:8080/ca/intermediate && echo " - Intermediate CA downloaded"
+
+if [ "$SERIAL" != "unknown" ]; then
+    curl -s -o /tmp/cert.pem "http://localhost:8080/certificate/$SERIAL" && echo " - Certificate downloaded"
+fi
+
+curl -s http://localhost:8080/crl && echo " - CRL endpoint (501)"
+
+# 10. Stop server
+echo -e "\n10. Stopping server..."
+kill $SERVER_PID 2>/dev/null || true
+
+echo -e "\n=== Demo completed successfully ==="
+10. Обновление setup.py
+python
+from setuptools import setup, find_packages
+
+setup(
+    name="micropki",
+    version="0.3.0",
+    description="Minimal Public Key Infrastructure for educational purposes",
+    author="MicroPKI Team",
+    packages=find_packages(),
+    install_requires=[
+        "cryptography>=41.0.0",
+    ],
+    entry_points={
+        "console_scripts": [
+            "micropki=micropki.cli:main",
+        ],
+    },
+    python_requires=">=3.8",
+    classifiers=[
+        "Development Status :: 3 - Alpha",
+        "Intended Audience :: Education",
+        "License :: OSI Approved :: MIT License",
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+    ],
+)
