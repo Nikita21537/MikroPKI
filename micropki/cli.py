@@ -5,15 +5,16 @@ from pathlib import Path
 
 from . import __version__
 from .ca import RootCA
-from .intermediate import IntermediateCA
+from .intermediate import IntermediateCA, IssueCertificate
 from . import csr as csr_module
 from . import templates
 from .chain import ChainValidator
+from .database import Database
+from .logger import setup_logger
 
 
 def validate_issue_intermediate_args(args):
     errors = []
-
     for file_path, name in [
         (args.root_cert, "root-cert"),
         (args.root_key, "root-key"),
@@ -43,7 +44,6 @@ def validate_issue_intermediate_args(args):
 
 def validate_issue_cert_args(args):
     errors = []
-
     for file_path, name in [
         (args.ca_cert, "ca-cert"),
         (args.ca_key, "ca-key"),
@@ -78,6 +78,49 @@ def parse_san_args(san_list):
     return san_list
 
 
+def print_table_certificates(certs):
+
+    if not certs:
+        print("No certificates found")
+        return
+
+    print(f"{'Serial':<20} {'Subject':<40} {'Status':<10} {'Expires':<20}")
+    print("-" * 90)
+    for cert in certs:
+        serial = cert['serial_hex'][:18] + ".." if len(cert['serial_hex']) > 20 else cert['serial_hex']
+        subject = cert['subject'][:38] + ".." if len(cert['subject']) > 40 else cert['subject']
+        expires = cert['not_after'][:10] if cert['not_after'] else "N/A"
+        print(f"{serial:<20} {subject:<40} {cert['status']:<10} {expires:<20}")
+
+
+def print_csv_certificates(certs):
+
+    import csv
+    import sys
+    writer = csv.writer(sys.stdout)
+    writer.writerow(['serial_hex', 'subject', 'issuer', 'not_before', 'not_after', 'status', 'created_at'])
+    for cert in certs:
+        writer.writerow([
+            cert['serial_hex'], cert['subject'], cert['issuer'],
+            cert['not_before'], cert['not_after'], cert['status'], cert['created_at']
+        ])
+
+
+def print_certificate_details(cert):
+
+    print(f"Serial Number: {cert['serial_hex']}")
+    print(f"Subject: {cert['subject']}")
+    print(f"Issuer: {cert['issuer']}")
+    print(f"Not Before: {cert['not_before']}")
+    print(f"Not After: {cert['not_after']}")
+    print(f"Status: {cert['status']}")
+    if cert.get('revocation_reason'):
+        print(f"Revocation Reason: {cert['revocation_reason']}")
+    if cert.get('revocation_date'):
+        print(f"Revocation Date: {cert['revocation_date']}")
+    print(f"Created At: {cert['created_at']}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="MicroPKI - Minimal Public Key Infrastructure",
@@ -99,179 +142,89 @@ def main():
         help="Available commands"
     )
 
-    ca_parser = subparsers.add_parser(
-        "ca",
-        help="Certificate Authority operations"
-    )
-    ca_subparsers = ca_parser.add_subparsers(
-        dest="ca_command",
-        help="CA subcommands"
-    )
 
-    # CA init (Sprint 1)
-    init_parser = ca_subparsers.add_parser(
-        "init",
-        help="Initialize a new Root CA"
-    )
-    init_parser.add_argument(
-        "--subject",
-        required=True,
-        help="Distinguished Name (e.g., '/CN=My Root CA' or 'CN=My Root CA,O=Demo')"
-    )
-    init_parser.add_argument(
-        "--key-type",
-        choices=['rsa', 'ecc'],
-        default='rsa',
-        help="Key type (default: rsa)"
-    )
-    init_parser.add_argument(
-        "--key-size",
-        type=int,
-        default=4096,
-        help="Key size in bits (RSA: 4096, ECC: 384) (default: 4096)"
-    )
-    init_parser.add_argument(
-        "--passphrase-file",
-        required=True,
-        help="Path to file containing the passphrase for private key encryption"
-    )
-    init_parser.add_argument(
-        "--out-dir",
-        default="./pki",
-        help="Output directory (default: ./pki)"
-    )
-    init_parser.add_argument(
-        "--validity-days",
-        type=int,
-        default=3650,
-        help="Validity period in days (default: 3650)"
-    )
+    db_parser = subparsers.add_parser("db", help="Database operations")
+    db_subparsers = db_parser.add_subparsers(dest="db_command", help="Database subcommands")
+
+
+    init_db_parser = db_subparsers.add_parser("init", help="Initialize certificate database")
+    init_db_parser.add_argument("--db-path", default="./pki/micropki.db", help="SQLite database path")
+
+
+    ca_parser = subparsers.add_parser("ca", help="Certificate Authority operations")
+    ca_subparsers = ca_parser.add_subparsers(dest="ca_command", help="CA subcommands")
+
+
+    init_parser = ca_subparsers.add_parser("init", help="Initialize a new Root CA")
+    init_parser.add_argument("--subject", required=True, help="Distinguished Name")
+    init_parser.add_argument("--key-type", choices=['rsa', 'ecc'], default='rsa')
+    init_parser.add_argument("--key-size", type=int, default=4096)
+    init_parser.add_argument("--passphrase-file", required=True)
+    init_parser.add_argument("--out-dir", default="./pki")
+    init_parser.add_argument("--validity-days", type=int, default=3650)
+
 
     issue_intermediate_parser = ca_subparsers.add_parser(
         "issue-intermediate",
         help="Create an Intermediate CA signed by the Root CA"
     )
-    issue_intermediate_parser.add_argument(
-        "--root-cert",
-        required=True,
-        help="Path to Root CA certificate (PEM)"
-    )
-    issue_intermediate_parser.add_argument(
-        "--root-key",
-        required=True,
-        help="Path to Root CA encrypted private key (PEM)"
-    )
-    issue_intermediate_parser.add_argument(
-        "--root-pass-file",
-        required=True,
-        help="File containing passphrase for Root CA key"
-    )
-    issue_intermediate_parser.add_argument(
-        "--subject",
-        required=True,
-        help="Distinguished Name for the Intermediate CA"
-    )
-    issue_intermediate_parser.add_argument(
-        "--key-type",
-        choices=['rsa', 'ecc'],
-        default='rsa',
-        help="Key type for Intermediate CA (default: rsa)"
-    )
-    issue_intermediate_parser.add_argument(
-        "--passphrase-file",
-        required=True,
-        help="Passphrase for Intermediate CA private key"
-    )
-    issue_intermediate_parser.add_argument(
-        "--out-dir",
-        default="./pki",
-        help="Output directory (default: ./pki)"
-    )
-    issue_intermediate_parser.add_argument(
-        "--validity-days",
-        type=int,
-        default=1825,
-        help="Validity period in days (default: 1825)"
-    )
-    issue_intermediate_parser.add_argument(
-        "--pathlen",
-        type=int,
-        default=0,
-        help="Path length constraint (default: 0)"
-    )
+    issue_intermediate_parser.add_argument("--root-cert", required=True)
+    issue_intermediate_parser.add_argument("--root-key", required=True)
+    issue_intermediate_parser.add_argument("--root-pass-file", required=True)
+    issue_intermediate_parser.add_argument("--subject", required=True)
+    issue_intermediate_parser.add_argument("--key-type", choices=['rsa', 'ecc'], default='rsa')
+    issue_intermediate_parser.add_argument("--passphrase-file", required=True)
+    issue_intermediate_parser.add_argument("--out-dir", default="./pki")
+    issue_intermediate_parser.add_argument("--validity-days", type=int, default=1825)
+    issue_intermediate_parser.add_argument("--pathlen", type=int, default=0)
 
-    issue_cert_parser = ca_subparsers.add_parser(
-        "issue-cert",
-        help="Issue an end-entity certificate"
-    )
-    issue_cert_parser.add_argument(
-        "--ca-cert",
-        required=True,
-        help="Intermediate CA certificate (PEM)"
-    )
-    issue_cert_parser.add_argument(
-        "--ca-key",
-        required=True,
-        help="Intermediate CA encrypted private key (PEM)"
-    )
-    issue_cert_parser.add_argument(
-        "--ca-pass-file",
-        required=True,
-        help="Passphrase for Intermediate CA key"
-    )
-    issue_cert_parser.add_argument(
-        "--template",
-        required=True,
-        choices=['server', 'client', 'code_signing'],
-        help="Certificate template"
-    )
-    issue_cert_parser.add_argument(
-        "--subject",
-        required=True,
-        help="Distinguished Name for the certificate"
-    )
-    issue_cert_parser.add_argument(
-        "--san",
-        action='append',
-        dest='san',
-        help="Subject Alternative Name(s) in format type:value (can be used multiple times)"
-    )
-    issue_cert_parser.add_argument(
-        "--out-dir",
-        default="./pki/certs",
-        help="Output directory (default: ./pki/certs)"
-    )
-    issue_cert_parser.add_argument(
-        "--validity-days",
-        type=int,
-        default=365,
-        help="Leaf certificate validity (default: 365)"
-    )
-    issue_cert_parser.add_argument(
-        "--csr",
-        help="Optional CSR file to sign instead of generating new key"
-    )
 
-    # Verify Chain (Sprint 2)
-    verify_parser = subparsers.add_parser(
-        "verify",
-        help="Verify certificate chain"
-    )
-    verify_parser.add_argument(
-        "--leaf",
-        required=True,
-        help="Leaf certificate (PEM)"
-    )
-    verify_parser.add_argument(
-        "--intermediate",
-        required=True,
-        help="Intermediate CA certificate (PEM)"
-    )
-    verify_parser.add_argument(
-        "--root",
-        required=True,
-        help="Root CA certificate (PEM)"
-    )
+    issue_cert_parser = ca_subparsers.add_parser("issue-cert", help="Issue an end-entity certificate")
+    issue_cert_parser.add_argument("--ca-cert", required=True)
+    issue_cert_parser.add_argument("--ca-key", required=True)
+    issue_cert_parser.add_argument("--ca-pass-file", required=True)
+    issue_cert_parser.add_argument("--template", required=True, choices=['server', 'client', 'code_signing'])
+    issue_cert_parser.add_argument("--subject", required=True)
+    issue_cert_parser.add_argument("--san", action='append', dest='san')
+    issue_cert_parser.add_argument("--out-dir", default="./pki/certs")
+    issue_cert_parser.add_argument("--validity-days", type=int, default=365)
+    issue_cert_parser.add_argument("--csr", help="Optional CSR file to sign instead of generating new key")
+
+
+    list_certs_parser = ca_subparsers.add_parser("list-certs", help="List certificates from database")
+    list_certs_parser.add_argument("--status", choices=['valid', 'revoked', 'expired'], help="Filter by status")
+    list_certs_parser.add_argument("--issuer", help="Filter by issuer (partial match)")
+    list_certs_parser.add_argument("--limit", type=int, default=100, help="Maximum results")
+    list_certs_parser.add_argument("--format", choices=['table', 'json', 'csv'], default='table', help="Output format")
+    list_certs_parser.add_argument("--db-path", default="./pki/micropki.db", help="Database path")
+
+
+    show_cert_parser = ca_subparsers.add_parser("show-cert", help="Show certificate by serial number")
+    show_cert_parser.add_argument("serial", help="Certificate serial number (hex)")
+    show_cert_parser.add_argument("--format", choices=['pem', 'text'], default='pem', help="Output format")
+    show_cert_parser.add_argument("--db-path", default="./pki/micropki.db", help="Database path")
+
+
+    repo_parser = subparsers.add_parser("repo", help="Repository operations")
+    repo_subparsers = repo_parser.add_subparsers(dest="repo_command", help="Repository subcommands")
+
+
+    serve_parser = repo_subparsers.add_parser("serve", help="Start repository HTTP server")
+    serve_parser.add_argument("--host", default="127.0.0.1", help="Bind address")
+    serve_parser.add_argument("--port", type=int, default=8080, help="TCP port")
+    serve_parser.add_argument("--db-path", default="./pki/micropki.db", help="Database path")
+    serve_parser.add_argument("--cert-dir", default="./pki/certs", help="Certificate directory")
+
+
+    status_parser = repo_subparsers.add_parser("status", help="Check repository server status")
+    status_parser.add_argument("--host", default="127.0.0.1")
+    status_parser.add_argument("--port", type=int, default=8080)
+
+
+    verify_parser = subparsers.add_parser("verify", help="Verify certificate chain")
+    verify_parser.add_argument("--leaf", required=True, help="Leaf certificate (PEM)")
+    verify_parser.add_argument("--intermediate", required=True, help="Intermediate CA certificate (PEM)")
+    verify_parser.add_argument("--root", required=True, help="Root CA certificate (PEM)")
 
     args = parser.parse_args()
 
@@ -279,10 +232,44 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    if args.command == "ca":
+
+    if args.command == "db":
+        if args.db_command == "init":
+            try:
+                db = Database(args.db_path)
+                print(f"Database initialized at {args.db_path}")
+                logger = setup_logger(args.log_file)
+                logger.info(f"Database initialized: {args.db_path}")
+            except Exception as e:
+                print(f"Error initializing database: {e}", file=sys.stderr)
+                sys.exit(1)
+        else:
+            print("Unknown db command. Available: init", file=sys.stderr)
+            sys.exit(1)
+
+
+    elif args.command == "ca":
         if args.ca_command == "init":
-            from .cli import main as old_main
-            pass
+            try:
+                ca = RootCA(args.out_dir, args.log_file)
+                ca.init_ca(
+                    subject=args.subject,
+                    key_type=args.key_type,
+                    key_size=args.key_size,
+                    passphrase_file=args.passphrase_file,
+                    validity_days=args.validity_days
+                )
+                print(f"Root CA successfully created in {args.out_dir}")
+
+                # Автоматически инициализируем базу данных
+                db_path = Path(args.out_dir) / "micropki.db"
+                if not db_path.exists():
+                    db = Database(str(db_path))
+                    print(f"Database initialized at {db_path}")
+
+            except Exception as e:
+                print(f"Error: {str(e)}", file=sys.stderr)
+                sys.exit(1)
 
         elif args.ca_command == "issue-intermediate":
             errors = validate_issue_intermediate_args(args)
@@ -316,9 +303,7 @@ def main():
                 sys.exit(1)
 
             try:
-                from .intermediate import IssueCertificate
                 issuer = IssueCertificate(args.log_file)
-
                 san_list = parse_san_args(args.san) if args.san else []
 
                 cert_path, key_path = issuer.issue_certificate(
@@ -340,6 +325,83 @@ def main():
             except Exception as e:
                 print(f"Error: {str(e)}", file=sys.stderr)
                 sys.exit(1)
+
+        elif args.ca_command == "list-certs":
+            try:
+                db = Database(args.db_path)
+                certs = db.list_certificates(status=args.status, limit=args.limit)
+
+                if args.format == 'table':
+                    print_table_certificates(certs)
+                elif args.format == 'json':
+                    import json
+                    print(json.dumps(certs, indent=2, default=str))
+                elif args.format == 'csv':
+                    print_csv_certificates(certs)
+
+            except Exception as e:
+                print(f"Error: {str(e)}", file=sys.stderr)
+                sys.exit(1)
+
+        elif args.ca_command == "show-cert":
+            try:
+                db = Database(args.db_path)
+                cert = db.get_certificate_by_serial(args.serial)
+
+                if cert:
+                    if args.format == 'pem':
+                        print(cert['cert_pem'])
+                    else:
+                        print_certificate_details(cert)
+                else:
+                    print(f"Certificate with serial {args.serial} not found", file=sys.stderr)
+                    sys.exit(1)
+            except Exception as e:
+                print(f"Error: {str(e)}", file=sys.stderr)
+                sys.exit(1)
+        else:
+            print("Unknown ca command", file=sys.stderr)
+            sys.exit(1)
+
+
+    elif args.command == "repo":
+        if args.repo_command == "serve":
+            try:
+                from .repository import RepositoryServer
+                import logging
+
+                logger = setup_logger(args.log_file)
+
+                # Проверяем существование базы данных
+                db_path = Path(args.db_path)
+                if not db_path.exists():
+                    print(f"Database not found at {args.db_path}. Run 'micropki db init' first.", file=sys.stderr)
+                    sys.exit(1)
+
+                db = Database(args.db_path)
+                server = RepositoryServer(args.host, args.port, db, args.cert_dir)
+                server.start()
+
+            except KeyboardInterrupt:
+                print("\nServer stopped")
+                sys.exit(0)
+            except Exception as e:
+                print(f"Error starting server: {e}", file=sys.stderr)
+                sys.exit(1)
+
+        elif args.repo_command == "status":
+            import socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            result = sock.connect_ex((args.host, args.port))
+            if result == 0:
+                print(f"Repository server is running on {args.host}:{args.port}")
+            else:
+                print(f"No repository server detected on {args.host}:{args.port}")
+            sock.close()
+        else:
+            print("Unknown repo command. Available: serve, status", file=sys.stderr)
+            sys.exit(1)
+
 
     elif args.command == "verify":
         try:
