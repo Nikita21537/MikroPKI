@@ -1,5 +1,6 @@
 import sqlite3
 
+
 import json
 from datetime import datetime
 from typing import Optional, List, Dict, Any
@@ -14,9 +15,13 @@ class Database:
         self.db_path = db_path
         self._init_db()
 
+    def _get_connection(self):
+
+        return sqlite3.connect(self.db_path)
+
     def _init_db(self):
         """Initialize database schema"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_connection()
         cursor = conn.cursor()
 
         cursor.execute("""
@@ -38,6 +43,7 @@ class Database:
         # Create indexes
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_serial_hex ON certificates(serial_hex)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_status ON certificates(status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_issuer ON certificates(issuer)")
 
         # Create serial counter table for uniqueness
         cursor.execute("""
@@ -49,14 +55,28 @@ class Database:
 
         cursor.execute("INSERT OR IGNORE INTO serial_counter (id, last_serial) VALUES (1, 0)")
 
+        # Sprint 4: Create CRL metadata table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS crl_metadata (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ca_subject TEXT NOT NULL,
+                crl_number INTEGER NOT NULL,
+                last_generated TEXT NOT NULL,
+                next_update TEXT NOT NULL,
+                crl_path TEXT NOT NULL
+            )
+        """)
+
+        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_ca_subject ON crl_metadata(ca_subject)")
+
         conn.commit()
         conn.close()
         logger.info(f"Database initialized at {self.db_path}")
 
     def insert_certificate(self, cert_data: Dict[str, Any]) -> bool:
-        """Insert a certificate into the database"""
+
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             cursor = conn.cursor()
 
             cursor.execute("""
@@ -87,9 +107,9 @@ class Database:
             return False
 
     def get_certificate_by_serial(self, serial_hex: str) -> Optional[Dict[str, Any]]:
-        """Retrieve certificate by serial number"""
+
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 
@@ -112,13 +132,13 @@ class Database:
     def list_certificates(self, status: Optional[str] = None,
                           issuer: Optional[str] = None,
                           limit: int = 100) -> List[Dict[str, Any]]:
-        """List certificates with optional filters"""
+
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 
-            query = "SELECT serial_hex, subject, issuer, not_before, not_after, status, created_at FROM certificates WHERE 1=1"
+            query = "SELECT serial_hex, subject, issuer, not_before, not_after, status, created_at, revocation_reason, revocation_date FROM certificates WHERE 1=1"
             params = []
 
             if status:
@@ -144,9 +164,9 @@ class Database:
 
     def update_certificate_status(self, serial_hex: str, status: str,
                                   revocation_reason: Optional[str] = None) -> bool:
-        """Update certificate status (for future revocation)"""
+
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             cursor = conn.cursor()
 
             update_data = {
@@ -160,7 +180,7 @@ class Database:
                 SET status = ?, revocation_date = ?, revocation_reason = ?
                 WHERE serial_hex = ?
             """, (update_data['status'], update_data['revocation_date'],
-                  update_data['revocation_reason'], serial_hex))
+                  update_data['revocation_reason'], serial_hex.upper()))
 
             conn.commit()
             conn.close()
@@ -171,14 +191,34 @@ class Database:
             logger.error(f"Error updating certificate status: {e}")
             return False
 
-    def get_revoked_certificates(self) -> List[Dict[str, Any]]:
-        """Get all revoked certificates for CRL generation"""
-        return self.list_certificates(status='revoked')
+    def get_revoked_certificates(self, issuer: Optional[str] = None) -> List[Dict[str, Any]]:
+
+        try:
+            conn = self._get_connection()
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            query = "SELECT * FROM certificates WHERE status = 'revoked'"
+            params = []
+
+            if issuer:
+                query += " AND issuer = ?"
+                params.append(issuer)
+
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            conn.close()
+
+            return [dict(row) for row in rows]
+
+        except Exception as e:
+            logger.error(f"Error getting revoked certificates: {e}")
+            return []
 
     def get_next_serial_counter(self) -> int:
-        """Get and increment the persistent serial counter"""
+
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             cursor = conn.cursor()
 
             cursor.execute("UPDATE serial_counter SET last_serial = last_serial + 1 WHERE id = 1")
