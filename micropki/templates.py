@@ -2,8 +2,6 @@ from typing import List, Optional
 from ipaddress import ip_address
 
 
-
-
 from cryptography import x509
 from cryptography.x509.oid import ExtendedKeyUsageOID
 from cryptography.hazmat.primitives import hashes
@@ -102,7 +100,7 @@ class ClientTemplate(CertificateTemplate):
 
 
 class CodeSigningTemplate(CertificateTemplate):
-    """Code signing certificate template."""
+
 
     def __init__(self):
         super().__init__("code_signing")
@@ -147,7 +145,6 @@ def get_template(template_name: str) -> CertificateTemplate:
 
 def build_san_extension(san_list: List[str], template_name: str) -> x509.SubjectAlternativeName:
 
-
     general_names = []
 
     for san in san_list:
@@ -171,7 +168,7 @@ def build_san_extension(san_list: List[str], template_name: str) -> x509.Subject
         else:
             raise ValueError(f"Unsupported SAN type: {san_type}. Supported: dns, ip, email, uri")
 
-
+    # Validate against template
     template = get_template(template_name)
     template.validate_sans(san_list)
 

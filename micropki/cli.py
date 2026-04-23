@@ -12,6 +12,7 @@ from .chain import ChainValidator
 from .database import Database
 from .logger import setup_logger
 from .revocation import RevocationManager, CRLManager, RevocationReason
+from .ocsp_responder import OCSPResponderServer
 
 
 def validate_issue_intermediate_args(args):
@@ -233,6 +234,7 @@ def main():
                                         'certificateHold', 'removeFromCRL', 'privilegeWithdrawn',
                                         'aACompromise'])
     revoke_parser.add_argument("--force", action="store_true", help="Skip confirmation prompt")
+    revoke_parser.add_argument("--out-dir", default="./pki", help="PKI directory")
 
     # Sprint 4: Generate CRL
     gen_crl_parser = ca_subparsers.add_parser("gen-crl", help="Generate Certificate Revocation List")
@@ -262,6 +264,34 @@ def main():
     show_cert_parser.add_argument("serial", help="Certificate serial number (hex)")
     show_cert_parser.add_argument("--format", choices=['pem', 'text'], default='pem', help="Output format")
     show_cert_parser.add_argument("--db-path", default="./pki/micropki.db", help="Database path")
+
+    # OCSP commands (Sprint 5)
+    ocsp_parser = subparsers.add_parser("ocsp", help="OCSP operations")
+    ocsp_subparsers = ocsp_parser.add_subparsers(dest="ocsp_command", help="OCSP subcommands")
+
+    # Issue OCSP certificate
+    issue_ocsp_parser = ocsp_subparsers.add_parser("issue-ocsp-cert", help="Issue OCSP signing certificate")
+    issue_ocsp_parser.add_argument("--ca-cert", required=True, help="CA certificate (PEM)")
+    issue_ocsp_parser.add_argument("--ca-key", required=True, help="CA private key (PEM)")
+    issue_ocsp_parser.add_argument("--ca-pass-file", required=True, help="CA passphrase file")
+    issue_ocsp_parser.add_argument("--subject", required=True, help="Subject DN for OCSP responder")
+    issue_ocsp_parser.add_argument("--key-type", choices=['rsa', 'ecc'], default='rsa')
+    issue_ocsp_parser.add_argument("--key-size", type=int, default=2048, help="Key size (RSA:2048+, ECC:256/384)")
+    issue_ocsp_parser.add_argument("--san", action='append', dest='san', help="SAN (dns:..., ip:..., uri:...)")
+    issue_ocsp_parser.add_argument("--ocsp-url", help="OCSP responder URL for AIA extension")
+    issue_ocsp_parser.add_argument("--out-dir", default="./pki/certs", help="Output directory")
+    issue_ocsp_parser.add_argument("--validity-days", type=int, default=365, help="Validity period in days")
+
+    # OCSP serve command
+    ocsp_serve_parser = ocsp_subparsers.add_parser("serve", help="Start OCSP responder server")
+    ocsp_serve_parser.add_argument("--host", default="127.0.0.1", help="Bind address")
+    ocsp_serve_parser.add_argument("--port", type=int, default=8081, help="TCP port")
+    ocsp_serve_parser.add_argument("--db-path", default="./pki/micropki.db", help="SQLite database path")
+    ocsp_serve_parser.add_argument("--responder-cert", required=True, help="OCSP signing certificate (PEM)")
+    ocsp_serve_parser.add_argument("--responder-key", required=True, help="OCSP private key (PEM, unencrypted)")
+    ocsp_serve_parser.add_argument("--ca-cert", required=True, help="Issuer CA certificate (PEM)")
+    ocsp_serve_parser.add_argument("--cache-ttl", type=int, default=60, help="Response cache TTL in seconds")
+    ocsp_serve_parser.add_argument("--log-file", help="Log file path")
 
     # Repository commands
     repo_parser = subparsers.add_parser("repo", help="Repository operations")
@@ -393,13 +423,12 @@ def main():
                 sys.exit(1)
 
             try:
-                db_path = Path(args.out_dir) / "micropki.db" if hasattr(args, 'out_dir') else Path("./pki/micropki.db")
+                db_path = Path(args.out_dir) / "micropki.db"
                 if not db_path.exists():
-                    # Try alternative path
                     db_path = Path("./pki/micropki.db")
 
                 db = Database(str(db_path))
-                out_dir = Path(args.out_dir) if hasattr(args, 'out_dir') else Path("./pki")
+                out_dir = Path(args.out_dir)
                 revoke_mgr = RevocationManager(db, out_dir, setup_logger(args.log_file))
 
                 success, message = revoke_mgr.revoke_certificate(
@@ -598,6 +627,153 @@ def main():
                 sys.exit(1)
         except Exception as e:
             print(f"Error: {str(e)}", file=sys.stderr)
+            sys.exit(1)
+
+    # OCSP commands (Sprint 5)
+    elif args.command == "ocsp":
+        if args.ocsp_command == "issue-ocsp-cert":
+            try:
+                from .ocsp import create_ocsp_signing_certificate
+                from .certificates import load_certificate, save_certificate
+                from .crypto_utils import load_passphrase, load_encrypted_private_key
+                from datetime import datetime, timezone
+                from cryptography.hazmat.primitives import serialization
+
+                # Validate inputs
+                ca_cert_path = Path(args.ca_cert)
+                ca_key_path = Path(args.ca_key)
+                ca_pass_file = Path(args.ca_pass_file)
+                out_dir = Path(args.out_dir)
+
+                if not ca_cert_path.exists():
+                    print(f"CA certificate not found: {ca_cert_path}", file=sys.stderr)
+                    sys.exit(1)
+                if not ca_key_path.exists():
+                    print(f"CA key not found: {ca_key_path}", file=sys.stderr)
+                    sys.exit(1)
+                if not ca_pass_file.exists():
+                    print(f"CA passphrase file not found: {ca_pass_file}", file=sys.stderr)
+                    sys.exit(1)
+
+                # Load CA
+                ca_cert = load_certificate(ca_cert_path)
+                ca_pass = load_passphrase(ca_pass_file)
+                ca_key = load_encrypted_private_key(ca_key_path, ca_pass)
+
+                # Create OCSP signing certificate
+                cert, private_key = create_ocsp_signing_certificate(
+                    issuer_cert=ca_cert,
+                    issuer_key=ca_key,
+                    subject_dn=args.subject,
+                    validity_days=args.validity_days,
+                    key_type=args.key_type,
+                    key_size=args.key_size,
+                    san_list=args.san if args.san else [],
+                    ocsp_url=args.ocsp_url
+                )
+
+                # Ensure output directory exists
+                out_dir.mkdir(parents=True, exist_ok=True)
+
+                # Save certificate
+                cert_path = out_dir / "ocsp.cert.pem"
+                save_certificate(cert, cert_path)
+
+                # Save private key (unencrypted for OCSP responder)
+                key_path = out_dir / "ocsp.key.pem"
+                unencrypted_key = private_key.private_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PrivateFormat.PKCS8,
+                    encryption_algorithm=serialization.NoEncryption()
+                )
+                with open(key_path, 'wb') as f:
+                    f.write(unencrypted_key)
+
+                # Set proper permissions
+                import os
+                try:
+                    os.chmod(key_path, 0o600)
+                except Exception:
+                    pass
+
+                print(f"OCSP signing certificate created:")
+                print(f"  Certificate: {cert_path}")
+                print(f"  Private key: {key_path}")
+                print(f"  Serial: {hex(cert.serial_number)}")
+                print(f"  Valid until: {cert.not_valid_after}")
+                print()
+                print("WARNING: Private key is stored unencrypted (required for OCSP responder).")
+                print("Ensure proper file permissions (0600) are maintained.")
+
+                # Also insert into database
+                db_path = out_dir.parent / "micropki.db"
+                if db_path.exists():
+                    try:
+                        from .database import Database
+                        db = Database(str(db_path))
+                        cert_data = {
+                            'serial_hex': format(cert.serial_number, '016X'),
+                            'subject': args.subject,
+                            'issuer': ca_cert.subject.rfc4514_string(),
+                            'not_before': cert.not_valid_before.isoformat(),
+                            'not_after': cert.not_valid_after.isoformat(),
+                            'cert_pem': cert.public_bytes(serialization.Encoding.PEM).decode(),
+                            'status': 'valid',
+                            'created_at': datetime.now(timezone.utc).isoformat()
+                        }
+                        db.insert_certificate(cert_data)
+                        print(f"Certificate recorded in database")
+                    except Exception as e:
+                        print(f"Warning: Could not insert into database: {e}")
+
+            except Exception as e:
+                print(f"Error: {str(e)}", file=sys.stderr)
+                sys.exit(1)
+
+        elif args.ocsp_command == "serve":
+            try:
+                # Validate inputs
+                db_path = Path(args.db_path)
+                responder_cert = Path(args.responder_cert)
+                responder_key = Path(args.responder_key)
+                ca_cert = Path(args.ca_cert)
+
+                if not db_path.exists():
+                    print(f"Database not found: {db_path}", file=sys.stderr)
+                    sys.exit(1)
+                if not responder_cert.exists():
+                    print(f"OCSP certificate not found: {responder_cert}", file=sys.stderr)
+                    sys.exit(1)
+                if not responder_key.exists():
+                    print(f"OCSP private key not found: {responder_key}", file=sys.stderr)
+                    sys.exit(1)
+                if not ca_cert.exists():
+                    print(f"CA certificate not found: {ca_cert}", file=sys.stderr)
+                    sys.exit(1)
+
+                # Create and start server
+                server = OCSPResponderServer(
+                    host=args.host,
+                    port=args.port,
+                    db_path=str(db_path),
+                    responder_cert_path=responder_cert,
+                    responder_key_path=responder_key,
+                    ca_cert_path=ca_cert,
+                    cache_ttl=args.cache_ttl,
+                    log_file=args.log_file
+                )
+
+                server.start()
+
+            except KeyboardInterrupt:
+                print("\nOCSP Responder stopped")
+                sys.exit(0)
+            except Exception as e:
+                print(f"Error: {str(e)}", file=sys.stderr)
+                sys.exit(1)
+
+        else:
+            print("Unknown ocsp command. Available: issue-ocsp-cert, serve", file=sys.stderr)
             sys.exit(1)
 
 

@@ -26,17 +26,14 @@ class RootCA:
 
         self.logger.info(f"Starting Root CA initialization for subject: {subject}")
 
-
         if key_type == "rsa" and key_size != 4096:
             raise ValueError("RSA key size for Root CA must be 4096 bits")
         if key_type == "ecc" and key_size != 384:
             raise ValueError("ECC key size for Root CA must be 384 bits (P-384)")
 
         try:
-
             self.logger.info("Loading passphrase from file")
             passphrase = crypto_utils.load_passphrase(Path(passphrase_file))
-
 
             self.logger.info(f"Generating {key_type.upper()} key pair (size: {key_size})")
             if key_type == "rsa":
@@ -45,10 +42,8 @@ class RootCA:
                 private_key = crypto_utils.generate_ecc_key(key_size)
             self.logger.info("Key generation completed successfully")
 
-
             serial_number = crypto_utils.generate_serial_number()
             self.logger.info(f"Generated serial number: {hex(serial_number)}")
-
 
             self.logger.info("Creating self-signed certificate")
             certificate = certificates.create_self_signed_certificate(
@@ -59,25 +54,21 @@ class RootCA:
             )
             self.logger.info("Certificate signing completed successfully")
 
-
             self.logger.info("Encrypting and saving private key")
             encrypted_key = crypto_utils.encrypt_private_key(private_key, passphrase)
             key_path = self.private_dir / "ca.key.pem"
             crypto_utils.save_private_key(encrypted_key, key_path)
             self.logger.info(f"Private key saved to: {key_path.absolute()}")
 
-
             self.logger.info("Saving certificate")
             cert_path = self.certs_dir / "ca.cert.pem"
             certificates.save_certificate(certificate, cert_path)
             self.logger.info(f"Certificate saved to: {cert_path.absolute()}")
 
-
             self.logger.info("Verifying key pair consistency")
             if not crypto_utils.verify_key_pair(private_key, private_key.public_key()):
                 raise RuntimeError("Key pair verification failed")
             self.logger.info("Key pair verification successful")
-
 
             self.logger.info("Generating policy document")
             self._generate_policy_document(
@@ -103,9 +94,9 @@ class RootCA:
             key_type: str,
             key_size: int
     ) -> None:
-        # Use standard attributes
-        not_before = certificate.not_valid_before
-        not_after = certificate.not_valid_after
+        # Используем timezone-aware для совместимости
+        not_before = certificate.not_valid_before_utc if hasattr(certificate, 'not_valid_before_utc') else certificate.not_valid_before
+        not_after = certificate.not_valid_after_utc if hasattr(certificate, 'not_valid_after_utc') else certificate.not_valid_after
 
         policy_content = f"""Certificate Policy Document - MicroPKI Root CA
 
@@ -116,8 +107,8 @@ Policy Version: 1.0
 CA Name (Subject DN): {subject}
 Certificate Serial Number: {hex(serial_number)}
 Validity Period:
-  Not Before: {not_before.strftime('%Y-%m-%d %H:%M:%S UTC')}
-  Not After:  {not_after.strftime('%Y-%m-%d %H:%M:%S UTC')}
+  Not Before: {not_before.strftime('%Y-%m-%d %H:%M:%S UTC') if not_before.tzinfo is None else not_before.strftime('%Y-%m-%d %H:%M:%S %Z')}
+  Not After:  {not_after.strftime('%Y-%m-%d %H:%M:%S UTC') if not_after.tzinfo is None else not_after.strftime('%Y-%m-%d %H:%M:%S %Z')}
 
 Cryptographic Parameters:
 ------------------------
@@ -149,7 +140,6 @@ End of Policy Document
             f.write(policy_content)
 
     def _get_certificate_fingerprint(self, certificate) -> str:
-
         from cryptography.hazmat.primitives import hashes
         fingerprint = certificate.fingerprint(hashes.SHA256())
         return ':'.join(format(b, '02x') for b in fingerprint).upper()

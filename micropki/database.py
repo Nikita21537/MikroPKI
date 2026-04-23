@@ -1,12 +1,9 @@
 import sqlite3
-
-
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 import logging
-
 logger = logging.getLogger(__name__)
 
 
@@ -20,7 +17,7 @@ class Database:
         return sqlite3.connect(self.db_path)
 
     def _init_db(self):
-        """Initialize database schema"""
+
         conn = self._get_connection()
         cursor = conn.cursor()
 
@@ -171,7 +168,7 @@ class Database:
 
             update_data = {
                 'status': status,
-                'revocation_date': datetime.utcnow().isoformat() if status == 'revoked' else None,
+                'revocation_date': datetime.now(timezone.utc).isoformat() if status == 'revoked' else None,
                 'revocation_reason': revocation_reason if status == 'revoked' else None
             }
 
@@ -231,4 +228,4 @@ class Database:
 
         except Exception as e:
             logger.error(f"Error getting serial counter: {e}")
-            return int(datetime.utcnow().timestamp())
+            return int(datetime.now(timezone.utc).timestamp())
