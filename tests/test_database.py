@@ -1,20 +1,45 @@
 import pytest
 import tempfile
-
 import shutil
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from micropki.database import Database
 
 
 @pytest.fixture
 def temp_db():
-    fd, path = tempfile.mkstemp(suffix='.db')
-    db = Database(path)
-    yield db, path
-    import os
-    os.close(fd)
-    os.unlink(path)
+
+
+    # Используем NamedTemporaryFile с delete=False для Windows
+    fd = None
+    try:
+        fd, path = tempfile.mkstemp(suffix='.db')
+        # Закрываем файловый дескриптор сразу после создания пути
+        if fd:
+            import os
+            os.close(fd)
+            fd = None
+
+        db = Database(path)
+        yield db, path
+
+    finally:
+        # Очистка после теста
+        import os
+        if fd is not None:
+            os.close(fd)
+        try:
+            if 'path' in locals() and os.path.exists(path):
+                os.unlink(path)
+        except (PermissionError, OSError):
+            # На Windows может потребоваться дополнительная задержка
+            import time
+            time.sleep(0.1)
+            try:
+                if os.path.exists(path):
+                    os.unlink(path)
+            except PermissionError:
+                pass
 
 
 def test_db_init(temp_db):
@@ -29,11 +54,11 @@ def test_insert_and_retrieve_certificate(temp_db):
         'serial_hex': '1234567890ABCDEF',
         'subject': 'CN=Test',
         'issuer': 'CN=Root CA',
-        'not_before': datetime.utcnow().isoformat(),
-        'not_after': datetime.utcnow().isoformat(),
+        'not_before': datetime.now(timezone.utc).isoformat(),
+        'not_after': datetime.now(timezone.utc).isoformat(),
         'cert_pem': '-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----',
         'status': 'valid',
-        'created_at': datetime.utcnow().isoformat()
+        'created_at': datetime.now(timezone.utc).isoformat()
     }
 
     assert db.insert_certificate(cert_data) is True
@@ -51,11 +76,11 @@ def test_list_certificates(temp_db):
             'serial_hex': f'SERIAL{i:02X}',
             'subject': f'CN=Test{i}',
             'issuer': 'CN=Root',
-            'not_before': datetime.utcnow().isoformat(),
-            'not_after': datetime.utcnow().isoformat(),
+            'not_before': datetime.now(timezone.utc).isoformat(),
+            'not_after': datetime.now(timezone.utc).isoformat(),
             'cert_pem': 'test',
             'status': 'valid',
-            'created_at': datetime.utcnow().isoformat()
+            'created_at': datetime.now(timezone.utc).isoformat()
         }
         db.insert_certificate(cert_data)
 
@@ -70,11 +95,11 @@ def test_duplicate_serial_prevention(temp_db):
         'serial_hex': 'DUPLICATE',
         'subject': 'CN=Test',
         'issuer': 'CN=Root',
-        'not_before': datetime.utcnow().isoformat(),
-        'not_after': datetime.utcnow().isoformat(),
+        'not_before': datetime.now(timezone.utc).isoformat(),
+        'not_after': datetime.now(timezone.utc).isoformat(),
         'cert_pem': 'test',
         'status': 'valid',
-        'created_at': datetime.utcnow().isoformat()
+        'created_at': datetime.now(timezone.utc).isoformat()
     }
 
     assert db.insert_certificate(cert_data) is True

@@ -1,9 +1,12 @@
+"""
+Тесты для модуля revocation (Sprint 4).
+"""
+
 import pytest
 import tempfile
 import shutil
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
-
 
 from micropki.database import Database
 from micropki.revocation import RevocationManager, CRLManager, RevocationReason
@@ -55,11 +58,11 @@ def temp_env():
         'serial_hex': '1234567890ABCDEF',
         'subject': 'CN=Test Certificate,O=Test',
         'issuer': root_cert.subject.rfc4514_string(),
-        'not_before': datetime.utcnow().isoformat(),
-        'not_after': (datetime.utcnow() + timedelta(days=365)).isoformat(),
+        'not_before': datetime.now(timezone.utc).isoformat(),
+        'not_after': (datetime.now(timezone.utc) + timedelta(days=365)).isoformat(),
         'cert_pem': 'test',
         'status': 'valid',
-        'created_at': datetime.utcnow().isoformat()
+        'created_at': datetime.now(timezone.utc).isoformat()
     }
     db.insert_certificate(cert_data)
 
@@ -75,6 +78,7 @@ def temp_env():
 
 
 def test_revocation_reason_mapping():
+    """Тест маппинга причин отзыва."""
     # String to enum
     assert RevocationReason.from_string("keyCompromise") == RevocationReason.KEY_COMPROMISE
     assert RevocationReason.from_string("cACompromise") == RevocationReason.CA_COMPROMISE
@@ -88,6 +92,7 @@ def test_revocation_reason_mapping():
 
 
 def test_revoke_certificate(temp_env):
+    """Тест отзыва сертификата."""
     db = temp_env['db']
     path = temp_env['path']
 
@@ -110,6 +115,7 @@ def test_revoke_certificate(temp_env):
 
 
 def test_revoke_nonexistent_certificate(temp_env):
+    """Тест отзыва несуществующего сертификата."""
     db = temp_env['db']
     path = temp_env['path']
 
@@ -125,6 +131,7 @@ def test_revoke_nonexistent_certificate(temp_env):
 
 
 def test_revoke_already_revoked_certificate(temp_env):
+    """Тест повторного отзыва сертификата."""
     db = temp_env['db']
     path = temp_env['path']
 
@@ -144,6 +151,7 @@ def test_revoke_already_revoked_certificate(temp_env):
 
 
 def test_check_revoked(temp_env):
+    """Тест проверки статуса отзыва."""
     db = temp_env['db']
     path = temp_env['path']
 
@@ -165,6 +173,7 @@ def test_check_revoked(temp_env):
 
 
 def test_crl_generation(temp_env):
+    """Тест генерации CRL."""
     db = temp_env['db']
     path = temp_env['path']
 
@@ -205,6 +214,7 @@ def test_crl_generation(temp_env):
 
 
 def test_crl_metadata_persistence(temp_env):
+    """Тест сохранения метаданных CRL."""
     db = temp_env['db']
     path = temp_env['path']
     crl_mgr = CRLManager(path, db)
@@ -243,6 +253,7 @@ def test_crl_metadata_persistence(temp_env):
 
 
 def test_crl_with_multiple_revoked_certs(temp_env):
+    """Тест CRL с несколькими отозванными сертификатами."""
     db = temp_env['db']
     path = temp_env['path']
 
@@ -254,11 +265,11 @@ def test_crl_with_multiple_revoked_certs(temp_env):
             'serial_hex': f'SERIAL{i:02X}',
             'subject': f'CN=Test{i},O=Test',
             'issuer': issuer,
-            'not_before': datetime.utcnow().isoformat(),
-            'not_after': (datetime.utcnow() + timedelta(days=365)).isoformat(),
+            'not_before': datetime.now(timezone.utc).isoformat(),
+            'not_after': (datetime.now(timezone.utc) + timedelta(days=365)).isoformat(),
             'cert_pem': 'test',
             'status': 'valid',
-            'created_at': datetime.utcnow().isoformat()
+            'created_at': datetime.now(timezone.utc).isoformat()
         }
         db.insert_certificate(cert_data)
 
