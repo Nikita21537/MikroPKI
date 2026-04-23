@@ -707,3 +707,220 @@ pytest tests/ -v
 
 chmod +x demo_sprint4.sh
 ./demo_sprint4.sh
+# Спринт 5 
+Sprint 5: OCSP Responder (НОВОЕ!)
+OCSP (Online Certificate Status Protocol) позволяет проверять статус сертификата в реальном времени без скачивания CRL.
+
+1. Выпуск сертификата для OCSP подписи
+
+micropki ocsp issue-ocsp-cert \
+    --ca-cert ./pki/certs/intermediate.cert.pem \
+    --ca-key ./pki/private/intermediate.key.pem \
+    --ca-pass-file secrets/intermediate.pass \
+    --subject "CN=OCSP Responder,O=MicroPKI" \
+    --key-type rsa \
+    --key-size 2048 \
+    --san dns:ocsp.example.com \
+    --ocsp-url http://ocsp.example.com:8081/ocsp \
+    --out-dir ./pki/certs \
+    --validity-days 365
+Особенности OCSP сертификата:
+
+Basic Constraints: CA=FALSE
+
+Key Usage: digitalSignature
+
+Extended Key Usage: OCSPSigning (1.3.6.1.5.5.7.3.9)
+
+Закрытый ключ хранится НЕЗАШИФРОВАННЫМ (требование OCSP responder)
+
+2. Запуск OCSP responder
+
+micropki ocsp serve \
+    --host 127.0.0.1 \
+    --port 8081 \
+    --db-path ./pki/micropki.db \
+    --responder-cert ./pki/certs/ocsp.cert.pem \
+    --responder-key ./pki/certs/ocsp.key.pem \
+    --ca-cert ./pki/certs/intermediate.cert.pem \
+    --cache-ttl 120 \
+    --log-file ./logs/ocsp.log
+Параметры ocsp serve:
+
+Параметр	Описание	По умолчанию
+--host	Адрес для привязки	127.0.0.1
+--port	TCP порт	8081
+--db-path	Путь к SQLite базе данных	./pki/micropki.db
+--responder-cert	Сертификат OCSP подписанта	Обязательный
+--responder-key	Закрытый ключ OCSP (unencrypted)	Обязательный
+--ca-cert	Сертификат издателя (CA)	Обязательный
+--cache-ttl	Время жизни кэша в секундах	60
+--log-file	Файл для логов	stderr
+3. Запросы к OCSP responder
+С помощью OpenSSL
+
+# Запрос статуса сертификата
+openssl ocsp -issuer ./pki/certs/intermediate.cert.pem \
+    -cert ./pki/certs/example.com.cert.pem \
+    -url http://localhost:8081/ocsp \
+    -resp_text \
+    -nonce
+
+# Запрос по серийному номеру
+openssl ocsp -issuer ./pki/certs/intermediate.cert.pem \
+    -serial 0x2A7F3B8E1C4D5F6A \
+    -url http://localhost:8081/ocsp
+
+# С сохранением ответа в файл
+openssl ocsp -issuer ./pki/certs/intermediate.cert.pem \
+    -cert ./pki/certs/example.com.cert.pem \
+    -url http://localhost:8081/ocsp \
+    -respout ./response.der
+
+# Проверка подписи OCSP ответа
+openssl ocsp -respin ./response.der \
+    -CAfile ./pki/certs/intermediate.cert.pem \
+    -verify_other ./pki/certs/ocsp.cert.pem
+С помощью curl
+
+# OCSP запрос требует бинарные данные, используйте openssl для генерации
+openssl ocsp -issuer ca.pem -cert cert.pem -reqout request.der
+curl -X POST http://localhost:8081/ocsp \
+    -H "Content-Type: application/ocsp-request" \
+    --data-binary @request.der \
+    --output response.der
+4. Health check
+
+# Проверка состояния OCSP responder
+curl http://localhost:8081/health
+# Ответ: OK
+5. Возможные статусы ответа
+Статус	Описание
+good	Сертификат действителен (не отозван)
+revoked	Сертификат отозван (с указанием даты и причины)
+unknown	Сертификат не найден или выдан другим CA
+HTTP Репозиторий
+Запуск сервера
+
+# Запуск HTTP сервера для распространения сертификатов и CRL
+micropki repo serve \
+    --host 127.0.0.1 \
+    --port 8080 \
+    --db-path ./pki/micropki.db \
+    --cert-dir ./pki/certs \
+    --out-dir ./pki
+API Endpoints
+Метод	Endpoint	Описание
+GET	/certificate/{serial}	Получить сертификат по серийному номеру
+GET	/ca/root	Получить корневой сертификат
+GET	/ca/intermediate	Получить промежуточный сертификат
+GET	/crl	Получить CRL Intermediate CA
+GET	/crl?ca=root	Получить CRL Root CA
+GET	/health	Проверка здоровья сервера
+Примеры запросов
+bash
+# Получить сертификат по серийному номеру
+curl http://localhost:8080/certificate/2A7F3B8E1C4D5F6A --output cert.pem
+
+# Получить корневой сертификат
+curl http://localhost:8080/ca/root --output root.pem
+
+# Получить промежуточный сертификат
+curl http://localhost:8080/ca/intermediate --output intermediate.pem
+
+# Получить CRL
+curl http://localhost:8080/crl --output intermediate.crl.pem
+
+# Получить CRL Root CA
+curl "http://localhost:8080/crl?ca=root" --output root.crl.pem
+
+# Проверка статуса сервера
+curl http://localhost:8080/health
+Структура директорий (Sprint 5)
+
+<out-dir>/
+├── private/                      # Зашифрованные закрытые ключи
+│   ├── ca.key.pem               # Ключ корневого CA
+│   └── intermediate.key.pem     # Ключ промежуточного CA
+├── certs/                        # Сертификаты
+│   ├── ca.cert.pem              # Сертификат корневого CA
+│   ├── intermediate.cert.pem    # Сертификат промежуточного CA
+│   ├── ocsp.cert.pem            # Сертификат OCSP подписанта (Sprint 5)
+│   ├── ocsp.key.pem             # Ключ OCSP (НЕЗАШИФРОВАННЫЙ)
+│   └── *.cert.pem               # Выпущенные сертификаты
+├── crl/                          # Списки отзыва (Sprint 4)
+│   ├── root.crl.pem             # CRL корневого CA
+│   └── intermediate.crl.pem     # CRL промежуточного CA
+├── csrs/                         # Опционально, для хранения CSR
+├── micropki.db                   # База данных SQLite
+└── policy.txt                    # Документ политики безопасности
+Структура базы данных
+
+-- Таблица сертификатов
+CREATE TABLE certificates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    serial_hex TEXT UNIQUE NOT NULL,
+    subject TEXT NOT NULL,
+    issuer TEXT NOT NULL,
+    not_before TEXT NOT NULL,
+    not_after TEXT NOT NULL,
+    cert_pem TEXT NOT NULL,
+    status TEXT NOT NULL,           -- 'valid', 'revoked', 'expired'
+    revocation_reason TEXT,
+    revocation_date TEXT,
+    created_at TEXT NOT NULL
+);
+
+-- Индексы для производительности
+CREATE INDEX idx_serial_hex ON certificates(serial_hex);
+CREATE INDEX idx_status ON certificates(status);
+CREATE INDEX idx_issuer ON certificates(issuer);
+
+-- Таблица метаданных CRL (Sprint 4)
+CREATE TABLE crl_metadata (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ca_subject TEXT NOT NULL,
+    crl_number INTEGER NOT NULL,
+    last_generated TEXT NOT NULL,
+    next_update TEXT NOT NULL,
+    crl_path TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX idx_ca_subject ON crl_metadata(ca_subject);
+Проверка с помощью OpenSSL
+Проверка сертификатов
+
+# Просмотр информации о сертификате
+openssl x509 -in pki/certs/ca.cert.pem -text -noout
+
+# Проверка самоподписанного сертификата
+openssl verify -CAfile pki/certs/ca.cert.pem pki/certs/ca.cert.pem
+
+# Проверка цепочки сертификатов
+openssl verify -CAfile pki/certs/ca.cert.pem \
+    -untrusted pki/certs/intermediate.cert.pem \
+    pki/certs/example.com.cert.pem
+Проверка CRL
+
+# Просмотр CRL
+openssl crl -inform PEM -in pki/crl/intermediate.crl.pem -text -noout
+
+# Проверка подписи CRL
+openssl crl -inform PEM -in pki/crl/intermediate.crl.pem \
+    -CAfile pki/certs/intermediate.cert.pem -noout
+Проверка OCSP (Sprint 5)
+
+# Запрос статуса через OCSP
+openssl ocsp -issuer pki/certs/intermediate.cert.pem \
+    -cert pki/certs/example.com.cert.pem \
+    -url http://localhost:8081/ocsp \
+    -resp_text
+
+# Проверка OCSP ответа
+openssl ocsp -respin response.der \
+    -CAfile pki/certs/intermediate.cert.pem \
+    -verify_other pki/certs/ocsp.cert.pem
+Тестирование
+Запуск всех тестов
+bash
+pytest tests/ -v
