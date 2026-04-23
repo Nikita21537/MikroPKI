@@ -634,3 +634,76 @@ setup(
         "Programming Language :: Python :: 3.11",
     ],
 )
+## Sprint 4 Features (CRL System)
+- **Certificate Revocation**: Отзыв сертификатов с указанием причины
+- **CRL Generation**: Генерация CRL v2 с поддержкой всех RFC 5280 reason codes
+- **CRL Distribution**: HTTP endpoints для получения CRL
+- **Revocation Status Check**: Проверка статуса сертификата
+
+### Новые команды CLI
+
+#### Отзыв сертификата
+
+# Отзыв с причиной
+micropki ca revoke 2A7F1234... --reason keyCompromise
+
+# Принудительный отзыв без подтверждения
+micropki ca revoke 3B8E5678... --reason superseded --force
+
+# Поддерживаемые причины отзыва:
+# unspecified, keyCompromise, cACompromise, affiliationChanged,
+# superseded, cessationOfOperation, certificateHold,
+# removeFromCRL, privilegeWithdrawn, aACompromise
+Генерация CRL
+bash
+# Генерация CRL для Intermediate CA
+micropki ca gen-crl --ca intermediate --next-update 14
+
+# Генерация CRL для Root CA с указанием выходного файла
+micropki ca gen-crl --ca root --out-file ./custom/root.crl.pem
+Проверка статуса отзыва
+bash
+# Проверка статуса сертификата
+micropki ca check-revoked 2A7F1234...
+CRL HTTP Endpoints
+bash
+# Получить CRL Intermediate CA
+curl http://localhost:8080/crl
+
+# Получить CRL Root CA
+curl http://localhost:8080/crl?ca=root
+
+# Проверка CRL с OpenSSL
+openssl crl -inform PEM -in crl.pem -text -noout
+openssl crl -inform PEM -in crl.pem -CAfile ca.cert.pem -noout
+Структура директорий (Sprint 4)
+text
+<out-dir>/
+├── private/
+│   ├── ca.key.pem
+│   └── intermediate.key.pem
+├── certs/
+│   ├── ca.cert.pem
+│   ├── intermediate.cert.pem
+│   └── *.cert.pem
+├── crl/                          # NEW
+│   ├── root.crl.pem
+│   └── intermediate.crl.pem
+├── micropki.db
+└── policy.txt
+text
+
+## Запуск тестов
+
+
+# Запуск всех тестов Sprint 4
+pytest tests/test_revocation.py -v
+
+# Запуск всех тестов проекта
+pytest tests/ -v
+Проверка реализации
+Для проверки работоспособности выполните:
+
+
+chmod +x demo_sprint4.sh
+./demo_sprint4.sh
