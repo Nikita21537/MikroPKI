@@ -1175,7 +1175,7 @@ MicroPKI — это легковесная реализация PKI для об�
 
 Аудит лог хранится в `./pki/audit/audit.log` в формате NDJSON с hash-цепочкой:
 
-```json
+```
 {
   "timestamp": "2026-02-13T15:04:05.123456Z",
   "level": "AUDIT",
@@ -1195,7 +1195,7 @@ MicroPKI — это легковесная реализация PKI для об�
 }
 Команды для работы с аудит логом
 Просмотр аудит логов
-bash
+
 # Показать все AUDIT события за последние 24 часа
 micropki audit query --from "$(date -d 'yesterday' -Iseconds)" --level AUDIT --format table
 
@@ -1208,7 +1208,7 @@ micropki audit query --serial "2A7F8B3C" --format csv
 # Фильтр по временному диапазону
 micropki audit query --from "2026-01-01T00:00:00" --to "2026-12-31T23:59:59"
 Проверка целостности аудит лога
-bash
+
 # Проверка целостности всего лога
 micropki audit verify
 
@@ -1216,11 +1216,11 @@ micropki audit verify
 micropki audit verify --log-file ./pki/audit/audit.log --chain-file ./pki/audit/chain.dat
 При успешной проверке:
 
-text
+
  Audit log integrity verified
 При обнаружении подделки:
 
-text
+
  Audit log integrity check FAILED!
   Line 42: Hash chain broken. Expected prev_hash=abc..., got def...
   Line 43: Hash mismatch. Entry may be tampered.
@@ -1241,7 +1241,7 @@ server	dns, ip
 client	dns, email
 code_signing	dns, uri
 Примеры нарушения политик
-bash
+
 # Попытка выпустить сертификат с RSA-1024 (будет отклонено)
 micropki ca issue-cert --ca-cert ca.cert.pem --ca-key ca.key.pem \
     --template server --subject "/CN=test" --key-type rsa --key-size 1024
@@ -1261,7 +1261,7 @@ micropki ca issue-cert --validity-days 730 ...
 Настройка политик через конфигурационный файл
 Создайте micropki.yaml:
 
-yaml
+
 policy:
   # Разрешить wildcard сертификаты (по умолчанию false)
   allow_wildcards: false
@@ -1297,7 +1297,7 @@ cat ./pki/audit/ct.log
 
 # Проверить, что сертификат с серийным номером залогирован
 micropki audit ct-verify --serial 2A7F8B3C
-# ✓ Certificate 2A7F8B3C found in CT log
+#  Certificate 2A7F8B3C found in CT log
 
 # Если не найден
 micropki audit ct-verify --serial NONEXISTENT
