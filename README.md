@@ -1135,6 +1135,275 @@ micropki client validate \
 
 # Отзыв сертификата
 micropki ca revoke <SERIAL> --reason keyCompromise --force
+# MicroPKI - Минимальная Public Key Infrastructure
+
+##  Спринт 7  - Усиление безопасности
+
+MicroPKI — это легковесная реализация PKI для образовательных и тестовых целей. Sprint 7 добавляет систему аудита с криптографической целостностью, контроль политик безопасности, rate limiting, Certificate Transparency лог и механизм обнаружения скомпрометированных ключей.
+
+
+## Новые возможности Спринта 7
+
+### 1. Аудит с криптографической целостностью
+- Все операции логируются в формате NDJSON с SHA-256 hash-цепочкой
+- Невозможно подделать или удалить записи без обнаружения
+- Команды для просмотра и верификации логов
+
+### 2. Контроль политик безопасности
+- Проверка минимальных размеров ключей (RSA 2048/3072/4096, ECC P-256/P-384)
+- Ограничение максимального срока действия сертификатов
+- Валидация типов SAN в зависимости от шаблона
+- Запрет wildcard-сертификатов (настраивается)
+
+### 3. Rate Limiting
+- Ограничение количества запросов на клиента для HTTP серверов
+- Защита от DoS-атак на репозиторий и OCSP responder
+
+### 4. Certificate Transparency (CT) лог
+- Симуляция CT лога для отслеживания выданных сертификатов
+- Возможность проверки наличия сертификата в логе
+
+### 5. Обнаружение компрометации ключей
+- Маркировка скомпрометированных ключей
+- Блокировка выдачи новых сертификатов по скомпрометированным ключам
+
+---
+
+## Система аудита и целостность логов
+
+### Формат аудит лога
+
+Аудит лог хранится в `./pki/audit/audit.log` в формате NDJSON с hash-цепочкой:
+
+```json
+{
+  "timestamp": "2026-02-13T15:04:05.123456Z",
+  "level": "AUDIT",
+  "operation": "issue_certificate",
+  "status": "success",
+  "message": "Issued server certificate for CN=example.com",
+  "metadata": {
+    "serial": "2A7F8B3C...",
+    "subject": "CN=example.com,O=MicroPKI",
+    "template": "server",
+    "requester": "127.0.0.1"
+  },
+  "integrity": {
+    "prev_hash": "abc123...",
+    "hash": "def456..."
+  }
+}
+Команды для работы с аудит логом
+Просмотр аудит логов
+bash
+# Показать все AUDIT события за последние 24 часа
+micropki audit query --from "$(date -d 'yesterday' -Iseconds)" --level AUDIT --format table
+
+# Показать события выдачи сертификатов в формате JSON
+micropki audit query --operation issue_certificate --format json
+
+# Поиск по серийному номеру
+micropki audit query --serial "2A7F8B3C" --format csv
+
+# Фильтр по временному диапазону
+micropki audit query --from "2026-01-01T00:00:00" --to "2026-12-31T23:59:59"
+Проверка целостности аудит лога
+bash
+# Проверка целостности всего лога
+micropki audit verify
+
+# Проверка с указанием путей
+micropki audit verify --log-file ./pki/audit/audit.log --chain-file ./pki/audit/chain.dat
+При успешной проверке:
+
+text
+ Audit log integrity verified
+При обнаружении подделки:
+
+text
+ Audit log integrity check FAILED!
+  Line 42: Hash chain broken. Expected prev_hash=abc..., got def...
+  Line 43: Hash mismatch. Entry may be tampered.
+Контроль политик безопасности
+Применяемые политики
+Тип	Параметр	Минимум	Максимум
+RSA	Root CA	4096 бит	-
+Intermediate CA	3072 бит	-
+End-entity	2048 бит	-
+ECC	Root/Intermediate	P-384	P-384
+End-entity	P-256	P-384
+Validity	Root CA	-	3650 дней (10 лет)
+Intermediate CA	-	1825 дней (5 лет)
+End-entity	-	365 дней (1 год)
+SAN ограничения по шаблонам
+Шаблон	Разрешённые SAN типы
+server	dns, ip
+client	dns, email
+code_signing	dns, uri
+Примеры нарушения политик
+bash
+# Попытка выпустить сертификат с RSA-1024 (будет отклонено)
+micropki ca issue-cert --ca-cert ca.cert.pem --ca-key ca.key.pem \
+    --template server --subject "/CN=test" --key-type rsa --key-size 1024
+# Ошибка: RSA key size must be at least 2048 bits for end_entity
+
+# Попытка выпустить сертификат с wildcard (по умолчанию запрещено)
+micropki ca issue-cert --san dns:*.example.com ...
+# Ошибка: Wildcard DNS name '*.example.com' is not allowed by policy
+
+# Попытка выпустить code_signing с email SAN
+micropki ca issue-cert --template code_signing --san email:test@example.com ...
+# Ошибка: SAN type 'email' not allowed for code_signing
+
+# Попытка выпустить сертификат на 2 года (превышает лимит)
+micropki ca issue-cert --validity-days 730 ...
+# Ошибка: Validity period 730 days exceeds maximum 365 days for end_entity
+Настройка политик через конфигурационный файл
+Создайте micropki.yaml:
+
+yaml
+policy:
+  # Разрешить wildcard сертификаты (по умолчанию false)
+  allow_wildcards: false
+  
+  # Максимальный срок действия для разных типов (в днях)
+  max_validity:
+    root: 3650      # 10 лет
+    intermediate: 1825  # 5 лет
+    end_entity: 365     # 1 год
+  
+  # Минимальные размеры ключей
+  min_key_size:
+    rsa:
+      root: 4096
+      intermediate: 3072
+      end_entity: 2048
+    ecc:
+      root: 384
+      intermediate: 384
+      end_entity: 256
+Certificate Transparency (CT) лог
+Что это?
+Симуляция Certificate Transparency лога — текстовый файл, в который записываются все выпущенные сертификаты.
+
+Просмотр CT лога
+
+# Просмотр всех записей
+cat ./pki/audit/ct.log
+
+# Формат записи:
+# 2026-02-13T15:04:05.123456Z | 2A7F8B3C... | CN=example.com | AA:BB:CC:...
+Проверка наличия сертификата
+
+# Проверить, что сертификат с серийным номером залогирован
+micropki audit ct-verify --serial 2A7F8B3C
+# ✓ Certificate 2A7F8B3C found in CT log
+
+# Если не найден
+micropki audit ct-verify --serial NONEXISTENT
+#  Certificate NONEXISTENT not found in CT log
+Интеграция с issuance
+Каждый выпущенный сертификат автоматически добавляется в CT лог.
+
+Rate Limiting
+Включение rate limiting для репозитория
+
+# Ограничение 5 запросов в секунду на клиента
+micropki repo serve --rate-limit 5 --rate-burst 10
+
+# Без rate limiting (по умолчанию)
+micropki repo serve
+Включение rate limiting для OCSP responder
+
+# Ограничение 10 запросов в секунду на клиента
+micropki ocsp serve --responder-cert ./ocsp.cert.pem \
+    --responder-key ./ocsp.key.pem \
+    --ca-cert ./ca.cert.pem \
+    --rate-limit 10 --rate-burst 20
+Что происходит при превышении лимита?
+http
+HTTP/1.1 429 Too Many Requests
+Retry-After: 5
+Content-Type: text/plain
+
+Rate limit exceeded. Please try again later.
+Алгоритм работы
+Используется алгоритм Token Bucket
+
+Для каждого клиента (по IP) создаётся отдельная bucket
+
+Токены пополняются с заданной скоростью (--rate-limit токенов/сек)
+
+Максимальное количество накопленных токенов — --rate-burst
+
+Обнаружение компрометации ключей
+Симуляция компрометации
+
+# Отметить сертификат как скомпрометированный и отозвать его
+micropki ca compromise --cert ./certs/example.com.cert.pem
+
+# С указанием причины
+micropki ca compromise --cert ./certs/example.com.cert.pem \
+    --reason keyCompromise --force
+
+# Доступные причины:
+# - keyCompromise (по умолчанию)
+# - cACompromise
+# - affiliationChanged
+# - superseded
+# - cessationOfOperation
+# - certificateHold
+# - privilegeWithdrawn
+# - aACompromise
+Что происходит при компрометации?
+Сертификат отзывается (status = 'revoked')
+
+Публичный ключ добавляется в таблицу compromised_keys
+
+Немедленно генерируется новый CRL
+
+Создаётся AUDIT запись о компрометации
+
+https://docs/compromise-flow.png
+
+Блокировка выдачи по скомпрометированным ключам
+
+# После компрометации ключа, попытка выпустить новый сертификат
+# с тем же публичным ключом будет отклонена
+
+micropki ca issue-cert --csr compromised.csr.pem --template server ...
+# Ошибка: This public key has been marked as compromised. Issuance blocked.
+Просмотр скомпрометированных ключей
+
+# Прямой запрос к SQLite
+sqlite3 ./pki/micropki.db "SELECT * FROM compromised_keys;"
+Установка и зависимости
+Требования
+Python 3.8 или выше
+
+OpenSSL (для верификации через командную строку, опционально)
+
+Установка из исходников
+
+# Клонирование репозитория
+git clone https://github.com/your-username/micropki.git
+cd micropki
+
+# Установка зависимостей
+pip install -r requirements.txt
+
+# Установка MicroPKI
+pip install -e .
+Зависимости
+
+cryptography>=41.0.0   # Криптографические операции
+PyYAML>=6.0            # Поддержка конфигурационных файлов
+requests>=2.31.0       # HTTP клиент для API
+pytest>=7.4.0          # Тестирование
+Проверка установки
+
+micropki --version
+# MicroPKI 0.7.0
 
 # Проверка статуса (OCSP first, CRL fallback)
 micropki client check-status \
