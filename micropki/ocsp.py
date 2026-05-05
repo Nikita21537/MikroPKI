@@ -3,7 +3,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple, List, Dict, Any
 from enum import IntEnum
 
-
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa, ec
@@ -33,15 +32,14 @@ class MalformedRequestError(OCSPError):
 
 
 class OCSPResponder:
-
     def __init__(
-        self,
-        responder_cert: x509.Certificate,
-        responder_key,
-        ca_cert: x509.Certificate,
-        db,
-        cache_ttl: int = 60,
-        logger_instance=None
+            self,
+            responder_cert: x509.Certificate,
+            responder_key,
+            ca_cert: x509.Certificate,
+            db,
+            cache_ttl: int = 60,
+            logger_instance=None
     ):
         self.responder_cert = responder_cert
         self.responder_key = responder_key
@@ -55,16 +53,12 @@ class OCSPResponder:
         self._cache: Dict[str, Tuple[bytes, datetime]] = {}
 
     def _compute_issuer_name_hash(self) -> bytes:
-        from cryptography.hazmat.primitives import hashes
-
         subject_der = self.ca_cert.subject.public_bytes(serialization.Encoding.DER)
         digest = hashes.Hash(hashes.SHA1(), default_backend())
         digest.update(subject_der)
         return digest.finalize()
 
     def _compute_issuer_key_hash(self) -> bytes:
-        from cryptography.hazmat.primitives import hashes
-
         public_key_der = self.ca_cert.public_key().public_bytes(
             encoding=serialization.Encoding.DER,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
@@ -76,7 +70,8 @@ class OCSPResponder:
     def verify_issuer_match(self, name_hash: bytes, key_hash: bytes) -> bool:
         return name_hash == self._issuer_name_hash and key_hash == self._issuer_key_hash
 
-    def _get_certificate_status(self, serial_hex: str, issuer_name: str) -> Tuple[OCSPCertStatus, Optional[datetime], Optional[str]]:
+    def _get_certificate_status(self, serial_hex: str, issuer_name: str) -> Tuple[
+        OCSPCertStatus, Optional[datetime], Optional[str]]:
         cert = self.db.get_certificate_by_serial(serial_hex)
 
         if cert is None or cert['issuer'] != issuer_name:
@@ -87,16 +82,16 @@ class OCSPResponder:
             if cert.get('revocation_date'):
                 try:
                     rev_date = datetime.fromisoformat(cert['revocation_date'])
+                    if rev_date.tzinfo is not None:
+                        rev_date = rev_date.replace(tzinfo=None)
                 except (ValueError, TypeError):
-                    rev_date = datetime.now(timezone.utc)
+                    rev_date = datetime.now(timezone.utc).replace(tzinfo=None)
             reason = cert.get('revocation_reason', 'unspecified')
             return OCSPCertStatus.REVOKED, rev_date, reason
 
         return OCSPCertStatus.GOOD, None, None
 
     def _get_responder_id_by_key_hash(self) -> bytes:
-        from cryptography.hazmat.primitives import hashes
-
         public_key_der = self.responder_cert.public_key().public_bytes(
             encoding=serialization.Encoding.DER,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
@@ -110,24 +105,28 @@ class OCSPResponder:
             ocsp_request = load_der_ocsp_request(request_data)
 
             parsed = {
-                'version': ocsp_request.version,
                 'requests': [],
                 'nonce': None,
             }
 
+            # Iterate through requests in OCSP request
             for req in ocsp_request:
                 parsed['requests'].append({
-                    'hash_algorithm': req.hash_algorithm.name,
+                    'hash_algorithm': req.hash_algorithm.name if hasattr(req, 'hash_algorithm') else "SHA1",
                     'issuer_name_hash': req.issuer_name_hash,
                     'issuer_key_hash': req.issuer_key_hash,
                     'serial_number': req.serial_number,
                     'serial_hex': format(req.serial_number, 'X').upper().lstrip('0') or '0',
                 })
 
-            if ocsp_request.extensions:
-                for ext in ocsp_request.extensions:
-                    if ext.oid.dotted_string == "1.3.6.1.5.5.7.48.1.2":
-                        parsed['nonce'] = ext.value
+            # Try to get extensions
+            try:
+                if hasattr(ocsp_request, 'extensions') and ocsp_request.extensions:
+                    for ext in ocsp_request.extensions:
+                        if ext.oid.dotted_string == "1.3.6.1.5.5.7.48.1.2":
+                            parsed['nonce'] = ext.value
+            except:
+                pass
 
             return parsed
 
@@ -136,7 +135,7 @@ class OCSPResponder:
             raise MalformedRequestError(f"Malformed OCSP request: {e}")
 
     def build_response(self, parsed_request: Dict[str, Any], issuer_name: str) -> bytes:
-        produced_at = datetime.now(timezone.utc)
+        produced_at = datetime.now(timezone.utc).replace(tzinfo=None)
         next_update = produced_at + timedelta(seconds=self.cache_ttl)
 
         builder = OCSPResponseBuilder()
@@ -147,31 +146,40 @@ class OCSPResponder:
             )
 
             if status == OCSPCertStatus.GOOD:
-                builder = builder.add_response(
-                    cert=req_info,
-                    status=OCSPResponseStatus.SUCCESSFUL,
-                    revocation_time=None,
-                    revocation_reason=None,
+                builder = builder.add_certificate_response(
+                    req_info['serial_number'],
+                    issuer_name_hash=req_info['issuer_name_hash'],
+                    issuer_key_hash=req_info['issuer_key_hash'],
+                    hash_algorithm=hashes.SHA1(),
+                    cert_status=OCSPResponseStatus.SUCCESSFUL,
                     this_update=produced_at,
                     next_update=next_update,
+                    revocation_time=None,
+                    revocation_reason=None,
                 )
             elif status == OCSPCertStatus.REVOKED:
-                builder = builder.add_response(
-                    cert=req_info,
-                    status=OCSPResponseStatus.SUCCESSFUL,
-                    revocation_time=rev_date,
-                    revocation_reason=reason if reason != 'unspecified' else None,
+                builder = builder.add_certificate_response(
+                    req_info['serial_number'],
+                    issuer_name_hash=req_info['issuer_name_hash'],
+                    issuer_key_hash=req_info['issuer_key_hash'],
+                    hash_algorithm=hashes.SHA1(),
+                    cert_status=OCSPResponseStatus.REVOKED,
                     this_update=produced_at,
                     next_update=next_update,
+                    revocation_time=rev_date or produced_at,
+                    revocation_reason=reason if reason != 'unspecified' else None,
                 )
             else:
-                builder = builder.add_response(
-                    cert=req_info,
-                    status=OCSPResponseStatus.SUCCESSFUL,
-                    revocation_time=None,
-                    revocation_reason=None,
+                builder = builder.add_certificate_response(
+                    req_info['serial_number'],
+                    issuer_name_hash=req_info['issuer_name_hash'],
+                    issuer_key_hash=req_info['issuer_key_hash'],
+                    hash_algorithm=hashes.SHA1(),
+                    cert_status=OCSPResponseStatus.UNAUTHORIZED,
                     this_update=produced_at,
                     next_update=next_update,
+                    revocation_time=None,
+                    revocation_reason=None,
                 )
 
         builder = builder.responder_id(
@@ -181,7 +189,11 @@ class OCSPResponder:
         builder = builder.produced_at(produced_at)
 
         if parsed_request.get('nonce'):
-            builder = builder.add_extension(parsed_request['nonce'], critical=False)
+            builder = builder.add_extension(x509.extensions.Extension(
+                oid=x509.oid.ExtensionOID.from_dotted_string("1.3.6.1.5.5.7.48.1.2"),
+                critical=False,
+                value=parsed_request['nonce']
+            ))
 
         if isinstance(self.responder_key, rsa.RSAPrivateKey):
             response = builder.sign(self.responder_key, hashes.SHA256(), default_backend())
@@ -218,32 +230,29 @@ class OCSPResponder:
 
     def _build_error_response(self, status: int) -> bytes:
         builder = OCSPResponseBuilder()
-        builder = builder.add_response(
-            cert=None,
-            status=status,
-            revocation_time=None,
-            revocation_reason=None,
-            this_update=datetime.now(timezone.utc),
-            next_update=datetime.now(timezone.utc) + timedelta(seconds=60),
+        builder = builder.responder_id(
+            OCSPResponseBuilder.RESPONDER_ID_KEY_HASH,
+            self._get_responder_id_by_key_hash()
         )
+        builder = builder.produced_at(datetime.now(timezone.utc).replace(tzinfo=None))
 
-        if isinstance(self.responder_key, rsa.RSAPrivateKey):
+        try:
             response = builder.sign(self.responder_key, hashes.SHA256(), default_backend())
-        else:
-            response = builder.sign(self.responder_key, hashes.SHA384(), default_backend())
-
-        return response.public_bytes(serialization.Encoding.DER)
+            return response.public_bytes(serialization.Encoding.DER)
+        except:
+            # Fallback: return minimal response
+            return b''
 
 
 def create_ocsp_signing_certificate(
-    issuer_cert: x509.Certificate,
-    issuer_key,
-    subject_dn: str,
-    validity_days: int,
-    key_type: str = "rsa",
-    key_size: int = 2048,
-    san_list: Optional[List[str]] = None,
-    ocsp_url: Optional[str] = None
+        issuer_cert: x509.Certificate,
+        issuer_key,
+        subject_dn: str,
+        validity_days: int,
+        key_type: str = "rsa",
+        key_size: int = 2048,
+        san_list: Optional[List[str]] = None,
+        ocsp_url: Optional[str] = None
 ) -> Tuple[x509.Certificate, any]:
     from .certificates import parse_dn_string
     from .crypto_utils import generate_rsa_key, generate_ecc_key, generate_serial_number

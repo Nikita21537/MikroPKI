@@ -9,6 +9,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa, ec
 from cryptography.hazmat.backends import default_backend
+from cryptography.x509 import ReasonFlags
 
 from .database import Database
 from .certificates import load_certificate, parse_dn_string
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 class RevocationReason(IntEnum):
+
 
     UNSPECIFIED = 0
     KEY_COMPROMISE = 1
@@ -48,7 +50,7 @@ class RevocationReason(IntEnum):
         return mapping.get(reason_str.lower())
 
     def to_string(self) -> str:
-        """Преобразует枚举 в строковое представление."""
+
         mapping = {
             self.UNSPECIFIED: "unspecified",
             self.KEY_COMPROMISE: "keyCompromise",
@@ -62,6 +64,22 @@ class RevocationReason(IntEnum):
             self.AA_COMPROMISE: "aACompromise",
         }
         return mapping.get(self, "unspecified")
+
+    def to_reason_flags(self) -> ReasonFlags:
+
+        mapping = {
+            self.UNSPECIFIED: ReasonFlags.unspecified,
+            self.KEY_COMPROMISE: ReasonFlags.key_compromise,
+            self.CA_COMPROMISE: ReasonFlags.ca_compromise,
+            self.AFFILIATION_CHANGED: ReasonFlags.affiliation_changed,
+            self.SUPERSEDED: ReasonFlags.superseded,
+            self.CESSATION_OF_OPERATION: ReasonFlags.cessation_of_operation,
+            self.CERTIFICATE_HOLD: ReasonFlags.certificate_hold,
+            self.REMOVE_FROM_CRL: ReasonFlags.remove_from_crl,
+            self.PRIVILEGE_WITHDRAWN: ReasonFlags.privilege_withdrawn,
+            self.AA_COMPROMISE: ReasonFlags.aa_compromise,
+        }
+        return mapping.get(self, ReasonFlags.unspecified)
 
 
 class CRLManager:
@@ -104,7 +122,8 @@ class CRLManager:
         conn = self.db._get_connection()
         cursor = conn.cursor()
 
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+        next_update_str = next_update.replace(tzinfo=None).isoformat()
 
         cursor.execute("""
             INSERT OR REPLACE INTO crl_metadata
@@ -114,7 +133,7 @@ class CRLManager:
             ca_subject,
             crl_number,
             now,
-            next_update.isoformat(),
+            next_update_str,
             str(crl_path.relative_to(self.out_dir))
         ))
 
@@ -157,23 +176,23 @@ class CRLManager:
 
         self.logger.info(f"Generating CRL for {ca_type} CA")
 
-        # Загрузка сертификата CA
+        # Load CA certificate
         ca_cert = load_certificate(ca_cert_path)
         ca_subject = ca_cert.subject.rfc4514_string()
 
-        # Загрузка закрытого ключа CA
+        # Load CA private key
         ca_pass = load_passphrase(ca_pass_file)
         ca_key = load_encrypted_private_key(ca_key_path, ca_pass)
 
-        # Получение отозванных сертификатов
+        # Get revoked certificates
         revoked_certs = self.get_revoked_certificates_for_issuer(ca_subject)
         self.logger.info(f"Found {len(revoked_certs)} revoked certificates for {ca_subject}")
 
-        # Получение номера CRL
+        # Get next CRL number
         crl_number = self._get_crl_number(ca_subject)
 
-        # Создание CRL с помощью cryptography
-        now = datetime.now(timezone.utc)
+        # Create CRL builder
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         next_update = now + timedelta(days=next_update_days)
 
         builder = x509.CertificateRevocationListBuilder()
@@ -181,7 +200,7 @@ class CRLManager:
         builder = builder.last_update(now)
         builder = builder.next_update(next_update)
 
-        # Добавление отозванных сертификатов
+        # Add revoked certificates
         for revoked in revoked_certs:
             try:
                 serial_int = int(revoked['serial_hex'], 16)
@@ -189,17 +208,21 @@ class CRLManager:
                 revoked_builder = x509.RevokedCertificateBuilder()
                 revoked_builder = revoked_builder.serial_number(serial_int)
 
-                # Парсим дату отзыва
+                # Parse revocation date
                 rev_date = datetime.fromisoformat(revoked['revocation_date'])
+                if rev_date.tzinfo is not None:
+                    rev_date = rev_date.replace(tzinfo=None)
                 revoked_builder = revoked_builder.revocation_date(rev_date)
 
-                # Добавляем причину отзыва если есть
+                # Add revocation reason if present
                 reason_str = revoked.get('revocation_reason')
                 if reason_str:
+                    # Convert string to ReasonFlags via RevocationReason
                     reason_enum = RevocationReason.from_string(reason_str)
                     if reason_enum is not None:
+                        reason_flag = reason_enum.to_reason_flags()
                         revoked_builder = revoked_builder.add_extension(
-                            x509.CRLReason(reason_enum.value),
+                            x509.CRLReason(reason_flag),
                             critical=False
                         )
 
@@ -209,7 +232,7 @@ class CRLManager:
             except Exception as e:
                 self.logger.warning(f"Failed to add revoked cert {revoked['serial_hex']}: {e}")
 
-        # Добавление расширений CRL
+        # Add CRL extensions
         # Authority Key Identifier
         aki = x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_cert.public_key())
         builder = builder.add_extension(aki, critical=False)
@@ -220,7 +243,7 @@ class CRLManager:
             critical=False
         )
 
-        # Подпись CRL
+        # Sign CRL
         if isinstance(ca_key, rsa.RSAPrivateKey):
             crl = builder.sign(
                 private_key=ca_key,
@@ -234,18 +257,18 @@ class CRLManager:
                 backend=default_backend()
             )
 
-        # Определение пути сохранения
+        # Determine output path
         if out_file is None:
             out_file = self.crl_dir / f"{ca_type}.crl.pem"
         else:
             out_file = Path(out_file)
 
-        # Сохранение CRL в PEM формате
+        # Save CRL in PEM format
         out_file.parent.mkdir(parents=True, exist_ok=True)
         with open(out_file, 'wb') as f:
             f.write(crl.public_bytes(serialization.Encoding.PEM))
 
-        # Обновление метаданных
+        # Update metadata
         self._update_crl_metadata(ca_subject, crl_number, next_update, out_file)
 
         self.logger.info(
@@ -256,6 +279,7 @@ class CRLManager:
         return out_file
 
     def get_crl_path(self, ca_type: str) -> Optional[Path]:
+
         crl_path = self.crl_dir / f"{ca_type}.crl.pem"
         if crl_path.exists():
             return crl_path
@@ -288,20 +312,20 @@ class RevocationManager:
 
         serial_hex = serial_hex.upper()
 
-        # Поиск сертификата
+        # Find certificate
         cert = self.db.get_certificate_by_serial(serial_hex)
         if cert is None:
             msg = f"Certificate with serial {serial_hex} not found"
             self.logger.error(msg)
             return False, msg
 
-        # Проверка статуса
+        # Check status
         if cert['status'] == 'revoked':
             msg = f"Certificate {serial_hex} is already revoked"
             self.logger.warning(msg)
             return True, msg
 
-        # Подтверждение если не force
+        # Confirm if not force
         if not force:
             print(f"Certificate to revoke:")
             print(f"  Subject: {cert['subject']}")
@@ -316,7 +340,7 @@ class RevocationManager:
                 self.logger.info(msg)
                 return False, msg
 
-        # Обновление статуса в БД
+        # Update status in database
         success = self.db.update_certificate_status(
             serial_hex,
             'revoked',
@@ -330,11 +354,11 @@ class RevocationManager:
 
         self.logger.info(f"Certificate {serial_hex} revoked successfully (reason: {reason})")
 
-        # Определяем тип CA для обновления CRL
+        # Determine CA type for CRL update
         issuer = cert['issuer']
         ca_type = self._determine_ca_type(issuer)
 
-        # Автоматически обновляем CRL после отзыва
+        # Auto-generate CRL after revocation
         try:
             self.logger.info(f"Auto-generating CRL for {ca_type} CA")
             self.generate_crl_for_issuer(issuer, ca_type)
@@ -347,7 +371,7 @@ class RevocationManager:
 
     def _determine_ca_type(self, issuer_subject: str) -> str:
 
-        # Проверяем наличие корневого сертификата
+        # Check for root certificate
         root_cert_path = self.out_dir / "certs" / "ca.cert.pem"
         if root_cert_path.exists():
             root_cert = load_certificate(root_cert_path)
@@ -363,7 +387,7 @@ class RevocationManager:
         next_update_days: int = 7
     ) -> Optional[Path]:
 
-        # Определяем пути к файлам CA
+        # Determine CA file paths
         if ca_type == "root":
             ca_cert_path = self.out_dir / "certs" / "ca.cert.pem"
             ca_key_path = self.out_dir / "private" / "ca.key.pem"
@@ -371,10 +395,10 @@ class RevocationManager:
             ca_cert_path = self.out_dir / "certs" / "intermediate.cert.pem"
             ca_key_path = self.out_dir / "private" / "intermediate.key.pem"
 
-        # Поиск файла с паролем
+        # Find passphrase file
         pass_file = self.out_dir.parent / "secrets" / f"{ca_type}.pass"
         if not pass_file.exists():
-            # Альтернативные пути
+            # Alternative paths
             alt_pass_file = self.out_dir.parent / "secrets" / f"{ca_type}_pass.txt"
             if alt_pass_file.exists():
                 pass_file = alt_pass_file

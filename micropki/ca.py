@@ -3,13 +3,15 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from . import crypto_utils, certificates, logger
+from .policy import get_policy, PolicyViolation
+from .audit import log_audit_event, init_audit_system
+from .transparency import log_certificate_to_ct
+from .certificates import compute_certificate_fingerprint
 
 
 class RootCA:
 
-
     def __init__(self, out_dir: str, log_file: Optional[str] = None):
-
         self.out_dir = Path(out_dir)
         self.private_dir = self.out_dir / "private"
         self.certs_dir = self.out_dir / "certs"
@@ -23,13 +25,22 @@ class RootCA:
             passphrase_file: str,
             validity_days: int
     ) -> None:
-
         self.logger.info(f"Starting Root CA initialization for subject: {subject}")
 
-        if key_type == "rsa" and key_size != 4096:
-            raise ValueError("RSA key size for Root CA must be 4096 bits")
-        if key_type == "ecc" and key_size != 384:
-            raise ValueError("ECC key size for Root CA must be 384 bits (P-384)")
+        # Get policy instance
+        policy = get_policy()
+
+        # Validate key size
+        is_valid, msg = policy.validate_key_size(key_type, key_size, "root")
+        if not is_valid:
+            log_audit_event("ca_init", "failure", msg, metadata={"subject": subject})
+            raise PolicyViolation(msg)
+
+        # Validate validity period
+        is_valid, msg = policy.validate_validity_period(validity_days, "root")
+        if not is_valid:
+            log_audit_event("ca_init", "failure", msg, metadata={"subject": subject})
+            raise PolicyViolation(msg)
 
         try:
             self.logger.info("Loading passphrase from file")
@@ -70,6 +81,32 @@ class RootCA:
                 raise RuntimeError("Key pair verification failed")
             self.logger.info("Key pair verification successful")
 
+            # Initialize audit system
+            init_audit_system(self.out_dir)
+
+            # CT Logging
+            fingerprint = compute_certificate_fingerprint(certificate)
+            log_certificate_to_ct(
+                serial=format(serial_number, '016X'),
+                subject=subject,
+                fingerprint=fingerprint,
+                issuer=subject  # Self-signed
+            )
+
+            # Audit logging
+            log_audit_event(
+                "ca_init",
+                "success",
+                f"Root CA initialized with subject {subject}",
+                metadata={
+                    "subject": subject,
+                    "key_type": key_type,
+                    "key_size": key_size,
+                    "serial": format(serial_number, '016X'),
+                    "validity_days": validity_days
+                }
+            )
+
             self.logger.info("Generating policy document")
             self._generate_policy_document(
                 subject=subject,
@@ -82,8 +119,11 @@ class RootCA:
 
             self.logger.info("Root CA initialization completed successfully")
 
+        except PolicyViolation:
+            raise
         except Exception as e:
             self.logger.error(f"CA initialization failed: {str(e)}")
+            log_audit_event("ca_init", "failure", str(e), metadata={"subject": subject})
             raise
 
     def _generate_policy_document(
@@ -94,7 +134,7 @@ class RootCA:
             key_type: str,
             key_size: int
     ) -> None:
-        # Используем timezone-aware для совместимости
+        # Handle timezone-aware vs naive datetimes
         not_before = certificate.not_valid_before_utc if hasattr(certificate, 'not_valid_before_utc') else certificate.not_valid_before
         not_after = certificate.not_valid_after_utc if hasattr(certificate, 'not_valid_after_utc') else certificate.not_valid_after
 
@@ -103,7 +143,8 @@ class RootCA:
 Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}
 Policy Version: 1.0
 
-
+CA Information:
+--------------
 CA Name (Subject DN): {subject}
 Certificate Serial Number: {hex(serial_number)}
 Validity Period:
@@ -122,6 +163,14 @@ Basic Constraints: CA=TRUE (Critical)
 Key Usage: Certificate Sign, CRL Sign (Critical)
 Subject Key Identifier: Included
 Authority Key Identifier: Included (self-signed)
+
+Security Policies:
+-----------------
+- RSA key size minimum: 4096 bits for Root CA
+- ECC key size minimum: 384 bits (P-384) for Root CA
+- Maximum validity period: 10 years (3650 days)
+- Private keys stored encrypted (PKCS#8 with AES-256)
+- All operations audited with cryptographic integrity
 
 Purpose:
 --------

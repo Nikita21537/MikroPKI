@@ -1,6 +1,7 @@
 import argparse
 import sys
 from pathlib import Path
+from datetime import datetime
 
 
 from . import __version__
@@ -13,6 +14,11 @@ from .database import Database
 from .logger import setup_logger
 from .revocation import RevocationManager, CRLManager, RevocationReason
 from .ocsp_responder import OCSPResponderServer
+from .audit import init_audit_system, get_audit_logger, log_audit_event, AuditLogger
+from .policy import init_policy, get_policy, PolicyViolation
+from .transparency import init_ct_log, log_certificate_to_ct, get_ct_log, CTLog
+from .compromise import CompromiseManager, CompromiseChecker, compute_public_key_hash
+from .ratelimit import init_rate_limiter, get_rate_limiter
 
 
 def validate_issue_intermediate_args(args):
@@ -62,20 +68,20 @@ def validate_issue_cert_args(args):
             f"--template must be server, client, or code_signing, got '{args.template}'"
         )
 
-    if not args.subject:
-        errors.append("--subject is required and must be non-empty")
+    if not args.subject and not args.csr:
+        errors.append("Either --subject or --csr is required")
 
     if args.validity_days <= 0:
         errors.append(f"--validity-days must be positive, got {args.validity_days}")
 
-    if args.template == 'server' and not args.san:
-        errors.append("Server certificate requires at least one SAN (--san dns:... or ip:...)")
+    if args.template == 'server' and not args.san and not args.csr:
+        errors.append(
+            "Server certificate requires at least one SAN (--san dns:... or ip:...), or provide --csr with SANs")
 
     return errors
 
 
 def validate_revoke_args(args):
-
     errors = []
 
     if not args.serial:
@@ -92,7 +98,6 @@ def validate_revoke_args(args):
 
 
 def validate_gen_crl_args(args):
-
     errors = []
 
     if args.ca not in ['root', 'intermediate']:
@@ -100,6 +105,69 @@ def validate_gen_crl_args(args):
 
     if args.next_update <= 0:
         errors.append(f"--next-update must be positive, got {args.next_update}")
+
+    return errors
+
+
+# Sprint 6: Client argument validators
+def validate_client_gen_csr_args(args):
+    errors = []
+
+    if not args.subject:
+        errors.append("--subject is required")
+
+    if args.key_type not in ['rsa', 'ecc']:
+        errors.append("--key-type must be 'rsa' or 'ecc'")
+
+    if args.key_type == 'rsa' and args.key_size not in [2048, 4096]:
+        errors.append("RSA key size must be 2048 or 4096")
+
+    if args.key_type == 'ecc' and args.key_size not in [256, 384]:
+        errors.append("ECC key size must be 256 or 384")
+
+    return errors
+
+
+def validate_client_request_cert_args(args):
+    errors = []
+
+    if not args.csr:
+        errors.append("--csr is required")
+    elif not Path(args.csr).exists():
+        errors.append(f"CSR file not found: {args.csr}")
+
+    if args.template not in ['server', 'client', 'code_signing']:
+        errors.append("--template must be server, client, or code_signing")
+
+    if not args.ca_url:
+        errors.append("--ca-url is required")
+
+    return errors
+
+
+def validate_client_validate_args(args):
+    errors = []
+
+    if not args.cert or not Path(args.cert).exists():
+        errors.append(f"Certificate file not found: {args.cert}")
+
+    if args.mode not in ['chain', 'full']:
+        errors.append("--mode must be 'chain' or 'full'")
+
+    if args.format not in ['text', 'json']:
+        errors.append("--format must be 'text' or 'json'")
+
+    return errors
+
+
+def validate_client_check_status_args(args):
+    errors = []
+
+    if not args.cert or not Path(args.cert).exists():
+        errors.append(f"Certificate file not found: {args.cert}")
+
+    if not args.ca_cert or not Path(args.ca_cert).exists():
+        errors.append(f"CA certificate file not found: {args.ca_cert}")
 
     return errors
 
@@ -213,17 +281,17 @@ def main():
     issue_intermediate_parser.add_argument("--validity-days", type=int, default=1825)
     issue_intermediate_parser.add_argument("--pathlen", type=int, default=0)
 
-    # Issue Certificate
+    # Issue Certificate (updated for CSR support)
     issue_cert_parser = ca_subparsers.add_parser("issue-cert", help="Issue an end-entity certificate")
     issue_cert_parser.add_argument("--ca-cert", required=True)
     issue_cert_parser.add_argument("--ca-key", required=True)
     issue_cert_parser.add_argument("--ca-pass-file", required=True)
     issue_cert_parser.add_argument("--template", required=True, choices=['server', 'client', 'code_signing'])
-    issue_cert_parser.add_argument("--subject", required=True)
-    issue_cert_parser.add_argument("--san", action='append', dest='san')
+    issue_cert_parser.add_argument("--subject", default="", help="Subject DN (ignored if --csr provided)")
+    issue_cert_parser.add_argument("--san", action='append', dest='san', help="SAN (ignored if --csr provided)")
     issue_cert_parser.add_argument("--out-dir", default="./pki/certs")
     issue_cert_parser.add_argument("--validity-days", type=int, default=365)
-    issue_cert_parser.add_argument("--csr", help="Optional CSR file to sign instead of generating new key")
+    issue_cert_parser.add_argument("--csr", help="CSR file to sign (overrides --subject and --san)")
 
     # Sprint 4: Revoke certificate
     revoke_parser = ca_subparsers.add_parser("revoke", help="Revoke a certificate")
@@ -265,6 +333,13 @@ def main():
     show_cert_parser.add_argument("--format", choices=['pem', 'text'], default='pem', help="Output format")
     show_cert_parser.add_argument("--db-path", default="./pki/micropki.db", help="Database path")
 
+    # Sprint 7: Ca compromise command
+    compromise_parser = ca_subparsers.add_parser("compromise", help="Simulate private key compromise")
+    compromise_parser.add_argument("--cert", required=True, help="Certificate file (PEM)")
+    compromise_parser.add_argument("--reason", default="keyCompromise", help="Compromise reason")
+    compromise_parser.add_argument("--force", action="store_true", help="Skip confirmation")
+    compromise_parser.add_argument("--out-dir", default="./pki", help="PKI directory")
+
     # OCSP commands (Sprint 5)
     ocsp_parser = subparsers.add_parser("ocsp", help="OCSP operations")
     ocsp_subparsers = ocsp_parser.add_subparsers(dest="ocsp_command", help="OCSP subcommands")
@@ -282,7 +357,7 @@ def main():
     issue_ocsp_parser.add_argument("--out-dir", default="./pki/certs", help="Output directory")
     issue_ocsp_parser.add_argument("--validity-days", type=int, default=365, help="Validity period in days")
 
-    # OCSP serve command
+    # OCSP serve command with rate limiting
     ocsp_serve_parser = ocsp_subparsers.add_parser("serve", help="Start OCSP responder server")
     ocsp_serve_parser.add_argument("--host", default="127.0.0.1", help="Bind address")
     ocsp_serve_parser.add_argument("--port", type=int, default=8081, help="TCP port")
@@ -291,9 +366,87 @@ def main():
     ocsp_serve_parser.add_argument("--responder-key", required=True, help="OCSP private key (PEM, unencrypted)")
     ocsp_serve_parser.add_argument("--ca-cert", required=True, help="Issuer CA certificate (PEM)")
     ocsp_serve_parser.add_argument("--cache-ttl", type=int, default=60, help="Response cache TTL in seconds")
+    ocsp_serve_parser.add_argument("--rate-limit", type=float, default=0,
+                                   help="Requests per second per client (0=disabled)")
+    ocsp_serve_parser.add_argument("--rate-burst", type=int, default=10, help="Maximum burst")
     ocsp_serve_parser.add_argument("--log-file", help="Log file path")
 
-    # Repository commands
+    # Sprint 6: Client commands
+    client_parser = subparsers.add_parser("client", help="Client operations")
+    client_subparsers = client_parser.add_subparsers(dest="client_command", help="Client subcommands")
+
+    # Client: gen-csr
+    gen_csr_parser = client_subparsers.add_parser("gen-csr", help="Generate private key and CSR")
+    gen_csr_parser.add_argument("--subject", required=True, help="Distinguished Name")
+    gen_csr_parser.add_argument("--key-type", choices=['rsa', 'ecc'], default='rsa')
+    gen_csr_parser.add_argument("--key-size", type=int, default=2048, help="Key size (RSA:2048/4096, ECC:256/384)")
+    gen_csr_parser.add_argument("--san", action='append', dest='san',
+                                help="Subject Alternative Name (dns:..., ip:..., email:..., uri:...)")
+    gen_csr_parser.add_argument("--out-key", default="./key.pem", help="Output private key file")
+    gen_csr_parser.add_argument("--out-csr", default="./request.csr.pem", help="Output CSR file")
+    gen_csr_parser.add_argument("--log-file", help="Log file path")
+
+    # Client: request-cert
+    request_cert_parser = client_subparsers.add_parser("request-cert", help="Submit CSR and get certificate")
+    request_cert_parser.add_argument("--csr", required=True, help="CSR file (PEM)")
+    request_cert_parser.add_argument("--template", required=True, choices=['server', 'client', 'code_signing'])
+    request_cert_parser.add_argument("--ca-url", required=True,
+                                     help="Repository base URL (e.g., http://localhost:8080)")
+    request_cert_parser.add_argument("--api-key", help="API key for authentication")
+    request_cert_parser.add_argument("--out-cert", default="./cert.pem", help="Output certificate file")
+    request_cert_parser.add_argument("--log-file", help="Log file path")
+
+    # Client: validate
+    validate_parser = client_subparsers.add_parser("validate", help="Validate certificate chain")
+    validate_parser.add_argument("--cert", required=True, help="Leaf certificate (PEM)")
+    validate_parser.add_argument("--untrusted", action='append', default=[],
+                                 help="Intermediate certificate(s) (PEM, can be repeated)")
+    validate_parser.add_argument("--trusted", action='append', default=["./pki/certs/ca.cert.pem"],
+                                 help="Trusted root certificate(s)")
+    validate_parser.add_argument("--crl", help="CRL file or URL")
+    validate_parser.add_argument("--ocsp", action='store_true', help="Enable OCSP checking")
+    validate_parser.add_argument("--mode", choices=['chain', 'full'], default='full', help="Validation mode")
+    validate_parser.add_argument("--validation-time", help="Validation time (ISO format, for testing)")
+    validate_parser.add_argument("--usage", choices=['server', 'client', 'code_signing'],
+                                 help="Expected certificate usage")
+    validate_parser.add_argument("--format", choices=['text', 'json'], default='text', help="Output format")
+    validate_parser.add_argument("--log-file", help="Log file path")
+
+    # Client: check-status
+    check_status_parser = client_subparsers.add_parser("check-status", help="Check certificate revocation status")
+    check_status_parser.add_argument("--cert", required=True, help="Certificate (PEM)")
+    check_status_parser.add_argument("--ca-cert", required=True, help="Issuer CA certificate (PEM)")
+    check_status_parser.add_argument("--crl", help="CRL file or URL (override)")
+    check_status_parser.add_argument("--ocsp-url", help="OCSP responder URL (override)")
+    check_status_parser.add_argument("--log-file", help="Log file path")
+
+    # Sprint 7: Audit commands
+    audit_parser = subparsers.add_parser("audit", help="Audit log operations")
+    audit_subparsers = audit_parser.add_subparsers(dest="audit_command", help="Audit subcommands")
+
+    # audit query
+    audit_query_parser = audit_subparsers.add_parser("query", help="Query audit logs")
+    audit_query_parser.add_argument("--from", dest="from_time", help="Start timestamp (ISO 8601)")
+    audit_query_parser.add_argument("--to", dest="to_time", help="End timestamp (ISO 8601)")
+    audit_query_parser.add_argument("--level", choices=["AUDIT", "INFO", "WARNING", "ERROR"], help="Filter by level")
+    audit_query_parser.add_argument("--operation", help="Filter by operation")
+    audit_query_parser.add_argument("--serial", help="Filter by certificate serial")
+    audit_query_parser.add_argument("--format", choices=["table", "json", "csv"], default="table", help="Output format")
+    audit_query_parser.add_argument("--verify", action="store_true", help="Verify integrity of returned logs")
+    audit_query_parser.add_argument("--out-dir", default="./pki", help="PKI directory")
+
+    # audit verify
+    audit_verify_parser = audit_subparsers.add_parser("verify", help="Verify audit log integrity")
+    audit_verify_parser.add_argument("--log-file", help="Path to audit log file")
+    audit_verify_parser.add_argument("--chain-file", help="Path to chain file")
+    audit_verify_parser.add_argument("--out-dir", default="./pki", help="PKI directory")
+
+    # audit ct-verify
+    audit_ct_parser = audit_subparsers.add_parser("ct-verify", help="Verify certificate in CT log")
+    audit_ct_parser.add_argument("--serial", required=True, help="Certificate serial number")
+    audit_ct_parser.add_argument("--out-dir", default="./pki", help="PKI directory")
+
+    # Repository commands with rate limiting
     repo_parser = subparsers.add_parser("repo", help="Repository operations")
     repo_subparsers = repo_parser.add_subparsers(dest="repo_command", help="Repository subcommands")
 
@@ -303,6 +456,8 @@ def main():
     serve_parser.add_argument("--db-path", default="./pki/micropki.db", help="Database path")
     serve_parser.add_argument("--cert-dir", default="./pki/certs", help="Certificate directory")
     serve_parser.add_argument("--out-dir", default="./pki", help="PKI directory for CRL files")
+    serve_parser.add_argument("--rate-limit", type=float, default=0, help="Requests per second per client (0=disabled)")
+    serve_parser.add_argument("--rate-burst", type=int, default=10, help="Maximum burst")
 
     status_parser = repo_subparsers.add_parser("status", help="Check repository server status")
     status_parser.add_argument("--host", default="127.0.0.1")
@@ -328,6 +483,13 @@ def main():
                 print(f"Database initialized at {args.db_path}")
                 logger = setup_logger(args.log_file)
                 logger.info(f"Database initialized: {args.db_path}")
+
+                # Initialize audit system
+                out_dir = Path(args.db_path).parent
+                init_audit_system(out_dir)
+                init_policy()
+                init_ct_log(out_dir)
+
             except Exception as e:
                 print(f"Error initializing database: {e}", file=sys.stderr)
                 sys.exit(1)
@@ -339,6 +501,13 @@ def main():
     elif args.command == "ca":
         if args.ca_command == "init":
             try:
+                out_dir = Path(args.out_dir)
+
+                # Initialize audit system
+                init_audit_system(out_dir)
+                init_policy()
+                init_ct_log(out_dir)
+
                 ca = RootCA(args.out_dir, args.log_file)
                 ca.init_ca(
                     subject=args.subject,
@@ -349,11 +518,19 @@ def main():
                 )
                 print(f"Root CA successfully created in {args.out_dir}")
 
-                # Автоматически инициализируем базу данных
+                # Automatically initialize database
                 db_path = Path(args.out_dir) / "micropki.db"
                 if not db_path.exists():
                     db = Database(str(db_path))
                     print(f"Database initialized at {db_path}")
+
+                # Log audit event
+                log_audit_event(
+                    "ca_init",
+                    "success",
+                    f"Root CA initialized with subject {args.subject}",
+                    metadata={"subject": args.subject, "key_type": args.key_type}
+                )
 
             except Exception as e:
                 print(f"Error: {str(e)}", file=sys.stderr)
@@ -367,6 +544,13 @@ def main():
                 sys.exit(1)
 
             try:
+                out_dir = Path(args.out_dir)
+
+                # Initialize systems if not already
+                init_audit_system(out_dir)
+                init_policy()
+                init_ct_log(out_dir)
+
                 ca = IntermediateCA(args.out_dir, args.log_file)
                 ca.create_intermediate_ca(
                     root_cert_path=Path(args.root_cert),
@@ -379,6 +563,14 @@ def main():
                     pathlen=args.pathlen
                 )
                 print(f"Intermediate CA successfully created in {args.out_dir}")
+
+                log_audit_event(
+                    "issue_intermediate",
+                    "success",
+                    f"Intermediate CA issued with subject {args.subject}",
+                    metadata={"subject": args.subject, "pathlen": args.pathlen}
+                )
+
             except Exception as e:
                 print(f"Error: {str(e)}", file=sys.stderr)
                 sys.exit(1)
@@ -393,6 +585,7 @@ def main():
             try:
                 issuer = IssueCertificate(args.log_file)
                 san_list = parse_san_args(args.san) if args.san else []
+                csr_path = Path(args.csr) if args.csr else None
 
                 cert_path, key_path = issuer.issue_certificate(
                     ca_cert_path=Path(args.ca_cert),
@@ -403,18 +596,22 @@ def main():
                     san_list=san_list,
                     out_dir=Path(args.out_dir),
                     validity_days=args.validity_days,
-                    csr_path=Path(args.csr) if args.csr else None
+                    csr_path=csr_path
                 )
 
                 print(f"Certificate successfully issued: {cert_path}")
                 if key_path:
                     print(f"Private key saved to: {key_path}")
                     print("WARNING: Private key is stored unencrypted. Ensure proper file permissions.")
+
+            except PolicyViolation as e:
+                print(f"Policy violation: {str(e)}", file=sys.stderr)
+                log_audit_event("issue_certificate", "failure", str(e))
+                sys.exit(1)
             except Exception as e:
                 print(f"Error: {str(e)}", file=sys.stderr)
                 sys.exit(1)
 
-        # Sprint 4: Revoke certificate
         elif args.ca_command == "revoke":
             errors = validate_revoke_args(args)
             if errors:
@@ -429,6 +626,9 @@ def main():
 
                 db = Database(str(db_path))
                 out_dir = Path(args.out_dir)
+
+                # Initialize systems
+                init_audit_system(out_dir)
                 revoke_mgr = RevocationManager(db, out_dir, setup_logger(args.log_file))
 
                 success, message = revoke_mgr.revoke_certificate(
@@ -438,13 +638,21 @@ def main():
                 )
 
                 print(message)
+
+                if success:
+                    log_audit_event(
+                        "revoke_certificate",
+                        "success",
+                        f"Certificate {args.serial} revoked",
+                        metadata={"serial": args.serial, "reason": args.reason}
+                    )
+
                 sys.exit(0 if success else 1)
 
             except Exception as e:
                 print(f"Error: {str(e)}", file=sys.stderr)
                 sys.exit(1)
 
-        # Sprint 4: Generate CRL
         elif args.ca_command == "gen-crl":
             errors = validate_gen_crl_args(args)
             if errors:
@@ -463,7 +671,7 @@ def main():
                 db = Database(str(db_path))
                 crl_mgr = CRLManager(out_dir, db, setup_logger(args.log_file))
 
-                # Определяем пути к файлам CA
+                # Determine CA file paths
                 if args.ca == "root":
                     ca_cert_path = out_dir / "certs" / "ca.cert.pem"
                     ca_key_path = out_dir / "private" / "ca.key.pem"
@@ -471,7 +679,7 @@ def main():
                     ca_cert_path = out_dir / "certs" / "intermediate.cert.pem"
                     ca_key_path = out_dir / "private" / "intermediate.key.pem"
 
-                # Поиск файла с паролем
+                # Find passphrase file
                 pass_file = out_dir.parent / "secrets" / f"{args.ca}.pass"
                 if not pass_file.exists():
                     pass_file = out_dir.parent / "secrets" / f"{args.ca}_pass.txt"
@@ -493,11 +701,17 @@ def main():
 
                 print(f"CRL generated successfully: {crl_path}")
 
+                log_audit_event(
+                    "generate_crl",
+                    "success",
+                    f"CRL generated for {args.ca} CA",
+                    metadata={"ca_type": args.ca, "crl_path": str(crl_path)}
+                )
+
             except Exception as e:
                 print(f"Error: {str(e)}", file=sys.stderr)
                 sys.exit(1)
 
-        # Sprint 4: Check revoked
         elif args.ca_command == "check-revoked":
             try:
                 out_dir = Path(args.out_dir)
@@ -563,11 +777,282 @@ def main():
             except Exception as e:
                 print(f"Error: {str(e)}", file=sys.stderr)
                 sys.exit(1)
+
+        elif args.ca_command == "compromise":
+            from .compromise import CompromiseManager
+            from .database import Database
+
+            try:
+                cert_path = Path(args.cert)
+                if not cert_path.exists():
+                    print(f"Certificate not found: {cert_path}", file=sys.stderr)
+                    sys.exit(1)
+
+                out_dir = Path(args.out_dir)
+                db_path = out_dir / "micropki.db"
+
+                if not db_path.exists():
+                    print(f"Database not found: {db_path}", file=sys.stderr)
+                    sys.exit(1)
+
+                db = Database(str(db_path))
+
+                # Initialize systems
+                init_audit_system(out_dir)
+                mgr = CompromiseManager(db, out_dir)
+
+                success, message = mgr.revoke_and_compromise(cert_path, args.reason, args.force)
+
+                print(message)
+                sys.exit(0 if success else 1)
+
+            except Exception as e:
+                print(f"Error: {e}", file=sys.stderr)
+                sys.exit(1)
+
         else:
             print("Unknown ca command", file=sys.stderr)
             sys.exit(1)
 
-    # Repository commands
+    # Sprint 7: Audit commands
+    elif args.command == "audit":
+        if args.audit_command == "query":
+            try:
+                out_dir = Path(args.out_dir)
+                audit_dir = out_dir / "audit"
+                log_path = audit_dir / "audit.log"
+
+                if not log_path.exists():
+                    print(f"Audit log not found: {log_path}")
+                    sys.exit(0)
+
+                logger = AuditLogger(log_path)
+
+                # Parse time filters
+                from_time = None
+                to_time = None
+                if args.from_time:
+                    from_time = datetime.fromisoformat(args.from_time)
+                if args.to_time:
+                    to_time = datetime.fromisoformat(args.to_time)
+
+                results = logger.query(
+                    from_time=from_time,
+                    to_time=to_time,
+                    level=args.level,
+                    operation=args.operation,
+                    serial=args.serial
+                )
+
+                if args.verify:
+                    is_valid, errors = logger.verify_integrity()
+                    if not is_valid:
+                        print("WARNING: Audit log integrity check FAILED!", file=sys.stderr)
+                        for err in errors:
+                            print(f"  {err}", file=sys.stderr)
+
+                if args.format == "table":
+                    print(f"{'Timestamp':<30} {'Level':<8} {'Operation':<20} {'Status':<10}")
+                    print("-" * 80)
+                    for entry in results:
+                        ts = entry.get('timestamp', '')[:19]
+                        level = entry.get('level', '')
+                        op = entry.get('operation', '')[:18]
+                        status = entry.get('status', '')
+                        print(f"{ts:<30} {level:<8} {op:<20} {status:<10}")
+                    print(f"\nTotal: {len(results)} entries")
+
+                elif args.format == "json":
+                    import json
+                    print(json.dumps(results, indent=2, default=str))
+
+                elif args.format == "csv":
+                    import csv
+                    writer = csv.writer(sys.stdout)
+                    writer.writerow(['timestamp', 'level', 'operation', 'status', 'message'])
+                    for entry in results:
+                        writer.writerow([
+                            entry.get('timestamp', ''),
+                            entry.get('level', ''),
+                            entry.get('operation', ''),
+                            entry.get('status', ''),
+                            entry.get('message', '')
+                        ])
+
+            except Exception as e:
+                print(f"Error: {e}", file=sys.stderr)
+                sys.exit(1)
+
+        elif args.audit_command == "verify":
+            try:
+                if args.log_file:
+                    log_path = Path(args.log_file)
+                else:
+                    out_dir = Path(args.out_dir)
+                    log_path = out_dir / "audit" / "audit.log"
+
+                chain_path = Path(args.chain_file) if args.chain_file else None
+
+                if not log_path.exists():
+                    print(f"Audit log not found: {log_path}")
+                    sys.exit(1)
+
+                logger = AuditLogger(log_path, chain_path)
+                is_valid, errors = logger.verify_integrity()
+
+                if is_valid:
+                    print("✓ Audit log integrity verified")
+                    sys.exit(0)
+                else:
+                    print("✗ Audit log integrity check FAILED!", file=sys.stderr)
+                    for error in errors:
+                        print(f"  {error}", file=sys.stderr)
+                    sys.exit(1)
+
+            except Exception as e:
+                print(f"Error: {e}", file=sys.stderr)
+                sys.exit(1)
+
+        elif args.audit_command == "ct-verify":
+            try:
+                out_dir = Path(args.out_dir)
+                ct_log = CTLog(out_dir / "audit" / "ct.log")
+
+                if ct_log.verify_inclusion(args.serial):
+                    print(f"✓ Certificate {args.serial} found in CT log")
+                    sys.exit(0)
+                else:
+                    print(f"✗ Certificate {args.serial} not found in CT log")
+                    sys.exit(1)
+
+            except Exception as e:
+                print(f"Error: {e}", file=sys.stderr)
+                sys.exit(1)
+
+        else:
+            print("Unknown audit command. Available: query, verify, ct-verify", file=sys.stderr)
+            sys.exit(1)
+
+    # Client commands (Sprint 6)
+    elif args.command == "client":
+        from .client_cli import ClientCLI
+
+        if args.client_command == "gen-csr":
+            errors = validate_client_gen_csr_args(args)
+            if errors:
+                for error in errors:
+                    print(f"Error: {error}", file=sys.stderr)
+                sys.exit(1)
+
+            try:
+                cli = ClientCLI(args.log_file)
+                san_list = args.san if args.san else []
+
+                key_path, csr_path = cli.generate_csr(
+                    subject=args.subject,
+                    key_type=args.key_type,
+                    key_size=args.key_size,
+                    san_list=san_list,
+                    out_key=Path(args.out_key),
+                    out_csr=Path(args.out_csr)
+                )
+
+                print(f"Private key: {key_path}")
+                print(f"CSR: {csr_path}")
+
+            except Exception as e:
+                print(f"Error: {str(e)}", file=sys.stderr)
+                sys.exit(1)
+
+        elif args.client_command == "request-cert":
+            errors = validate_client_request_cert_args(args)
+            if errors:
+                for error in errors:
+                    print(f"Error: {error}", file=sys.stderr)
+                sys.exit(1)
+
+            try:
+                cli = ClientCLI(args.log_file)
+                cert_path = cli.request_certificate(
+                    csr_path=Path(args.csr),
+                    template=args.template,
+                    ca_url=args.ca_url,
+                    out_cert=Path(args.out_cert),
+                    api_key=args.api_key
+                )
+
+                print(f"Certificate issued: {cert_path}")
+
+            except Exception as e:
+                print(f"Error: {str(e)}", file=sys.stderr)
+                sys.exit(1)
+
+        elif args.client_command == "validate":
+            errors = validate_client_validate_args(args)
+            if errors:
+                for error in errors:
+                    print(f"Error: {error}", file=sys.stderr)
+                sys.exit(1)
+
+            try:
+                cli = ClientCLI(args.log_file)
+
+                validation_time = None
+                if args.validation_time:
+                    validation_time = datetime.fromisoformat(args.validation_time)
+
+                untrusted_paths = [Path(p) for p in args.untrusted]
+                trusted_paths = [Path(p) for p in args.trusted]
+
+                result = cli.validate_chain(
+                    cert_path=Path(args.cert),
+                    untrusted_paths=untrusted_paths,
+                    trusted_paths=trusted_paths,
+                    crl_source=args.crl,
+                    ocsp_enabled=args.ocsp,
+                    mode=args.mode,
+                    validation_time=validation_time,
+                    intended_usage=args.usage,
+                    output_format=args.format
+                )
+
+                sys.exit(0 if result.is_valid else 1)
+
+            except Exception as e:
+                print(f"Error: {str(e)}", file=sys.stderr)
+                sys.exit(1)
+
+        elif args.client_command == "check-status":
+            errors = validate_client_check_status_args(args)
+            if errors:
+                for error in errors:
+                    print(f"Error: {error}", file=sys.stderr)
+                sys.exit(1)
+
+            try:
+                cli = ClientCLI(args.log_file)
+                status = cli.check_revocation_status(
+                    cert_path=Path(args.cert),
+                    ca_cert_path=Path(args.ca_cert),
+                    crl_source=args.crl,
+                    ocsp_url=args.ocsp_url
+                )
+
+                if status.value == "good":
+                    sys.exit(0)
+                elif status.value == "revoked":
+                    sys.exit(1)
+                else:
+                    sys.exit(2)
+
+            except Exception as e:
+                print(f"Error: {str(e)}", file=sys.stderr)
+                sys.exit(1)
+
+        else:
+            print("Unknown client command. Available: gen-csr, request-cert, validate, check-status", file=sys.stderr)
+            sys.exit(1)
+
     elif args.command == "repo":
         if args.repo_command == "serve":
             try:
@@ -576,19 +1061,38 @@ def main():
 
                 logger = setup_logger(args.log_file)
 
-                # Проверяем существование базы данных
+                # Initialize rate limiting
+                if args.rate_limit > 0:
+                    init_rate_limiter(args.rate_limit, args.rate_burst)
+                    print(f"Rate limiting enabled: {args.rate_limit} req/s, burst {args.rate_burst}")
+
+                # Initialize audit system
+                out_dir = Path(args.out_dir)
+                init_audit_system(out_dir)
+                init_policy()
+                init_ct_log(out_dir)
+
+                # Check database existence
                 db_path = Path(args.db_path)
                 if not db_path.exists():
                     print(f"Database not found at {args.db_path}. Run 'micropki db init' first.", file=sys.stderr)
                     sys.exit(1)
 
                 db = Database(args.db_path)
-                out_dir = Path(args.out_dir) if hasattr(args, 'out_dir') else Path("./pki")
                 server = RepositoryServer(args.host, args.port, db, args.cert_dir, out_dir)
+
+                log_audit_event(
+                    "repo_serve_start",
+                    "success",
+                    f"Repository server started on {args.host}:{args.port}",
+                    metadata={"host": args.host, "port": args.port}
+                )
+
                 server.start()
 
             except KeyboardInterrupt:
                 print("\nServer stopped")
+                log_audit_event("repo_serve_stop", "success", "Repository server stopped")
                 sys.exit(0)
             except Exception as e:
                 print(f"Error starting server: {e}", file=sys.stderr)
@@ -732,6 +1236,11 @@ def main():
 
         elif args.ocsp_command == "serve":
             try:
+                # Initialize rate limiting
+                if args.rate_limit > 0:
+                    init_rate_limiter(args.rate_limit, args.rate_burst)
+                    print(f"Rate limiting enabled: {args.rate_limit} req/s, burst {args.rate_burst}")
+
                 # Validate inputs
                 db_path = Path(args.db_path)
                 responder_cert = Path(args.responder_cert)
@@ -751,6 +1260,10 @@ def main():
                     print(f"CA certificate not found: {ca_cert}", file=sys.stderr)
                     sys.exit(1)
 
+                # Initialize audit system
+                out_dir = db_path.parent
+                init_audit_system(out_dir)
+
                 # Create and start server
                 server = OCSPResponderServer(
                     host=args.host,
@@ -763,10 +1276,18 @@ def main():
                     log_file=args.log_file
                 )
 
+                log_audit_event(
+                    "ocsp_serve_start",
+                    "success",
+                    f"OCSP responder started on {args.host}:{args.port}",
+                    metadata={"host": args.host, "port": args.port}
+                )
+
                 server.start()
 
             except KeyboardInterrupt:
                 print("\nOCSP Responder stopped")
+                log_audit_event("ocsp_serve_stop", "success", "OCSP responder stopped")
                 sys.exit(0)
             except Exception as e:
                 print(f"Error: {str(e)}", file=sys.stderr)

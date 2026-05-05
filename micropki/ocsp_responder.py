@@ -5,7 +5,6 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 from typing import Optional
 
-
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 
@@ -13,16 +12,35 @@ from .ocsp import OCSPResponder
 from .database import Database
 from .certificates import load_certificate
 from .logger import setup_logger
+from .ratelimit import get_rate_limiter
+from .audit import log_audit_event
 
 logger = logging.getLogger(__name__)
 
 
 class OCSPHTTPHandler(BaseHTTPRequestHandler):
+
+
     server_version = "MicroPKI-OCSP/1.0"
 
     def __init__(self, *args, responder=None, **kwargs):
         self.responder = responder
         super().__init__(*args, **kwargs)
+
+    def _check_rate_limit(self) -> bool:
+        limiter = get_rate_limiter()
+        if limiter and limiter.is_enabled():
+            client_ip = self.client_address[0]
+            allowed, retry_after = limiter.check_request(client_ip)
+            if not allowed:
+                self.send_response(429)
+                self.send_header('Content-Type', 'text/plain')
+                self.send_header('Retry-After', str(retry_after))
+                self.end_headers()
+                self.wfile.write(b'Rate limit exceeded. Please try again later.')
+                logger.warning(f"Rate limit exceeded for {client_ip}")
+                return False
+        return True
 
     def log_message(self, format, *args):
         logger.info(f"[OCSP] {self.address_string()} - {format % args}")
@@ -35,12 +53,34 @@ class OCSPHTTPHandler(BaseHTTPRequestHandler):
         self.wfile.write(response_data)
 
     def _send_error_response(self, status_code: int, message: str):
+
         self.send_response(status_code)
         self.send_header('Content-Type', 'text/plain')
         self.end_headers()
         self.wfile.write(message.encode())
 
+    def do_GET(self):
+
+        # Rate limiting check
+        if not self._check_rate_limit():
+            return
+
+        parsed = urlparse(self.path)
+
+        if parsed.path == '/health':
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b'OK')
+            return
+
+        self._send_error_response(404, "Not found. Use POST /ocsp for OCSP requests.")
+
     def do_POST(self):
+        # Rate limiting check
+        if not self._check_rate_limit():
+            return
+
         parsed = urlparse(self.path)
 
         if parsed.path != '/ocsp':
@@ -70,31 +110,21 @@ class OCSPHTTPHandler(BaseHTTPRequestHandler):
             logger.error(f"OCSP request failed: {e}")
             self._send_error_response(500, f"Internal server error: {e}")
 
-    def do_GET(self):
-        parsed = urlparse(self.path)
-
-        if parsed.path == '/health':
-            self.send_response(200)
-            self.send_header('Content-Type', 'text/plain')
-            self.end_headers()
-            self.wfile.write(b'OK')
-            return
-
-        self._send_error_response(404, "Not found. Use POST /ocsp for OCSP requests.")
-
 
 class OCSPResponderServer:
+
     def __init__(
-        self,
-        host: str,
-        port: int,
-        db_path: str,
-        responder_cert_path: Path,
-        responder_key_path: Path,
-        ca_cert_path: Path,
-        cache_ttl: int = 60,
-        log_file: Optional[str] = None
+            self,
+            host: str,
+            port: int,
+            db_path: str,
+            responder_cert_path: Path,
+            responder_key_path: Path,
+            ca_cert_path: Path,
+            cache_ttl: int = 60,
+            log_file: Optional[str] = None
     ):
+
         self.host = host
         self.port = port
         self.db_path = db_path
@@ -113,7 +143,9 @@ class OCSPResponderServer:
 
         with open(self.responder_key_path, 'rb') as f:
             key_data = f.read()
-        responder_key = serialization.load_pem_private_key(key_data, password=None, backend=default_backend())
+        responder_key = serialization.load_pem_private_key(
+            key_data, password=None, backend=default_backend()
+        )
 
         ca_cert = load_certificate(self.ca_cert_path)
         db = Database(self.db_path)
@@ -143,14 +175,32 @@ class OCSPResponderServer:
 
         self.server = HTTPServer((self.host, self.port), handler)
 
+        # Log startup
         self.logger.info("=" * 60)
         self.logger.info(f"OCSP Responder starting on http://{self.host}:{self.port}")
         self.logger.info(f"  OCSP endpoint: POST http://{self.host}:{self.port}/ocsp")
         self.logger.info(f"  Health check:  GET http://{self.host}:{self.port}/health")
+
+        # Log rate limiting status
+        limiter = get_rate_limiter()
+        if limiter and limiter.is_enabled():
+            self.logger.info(f"  Rate limiting: enabled ({limiter.rate} req/s, burst {limiter.burst})")
+        else:
+            self.logger.info("  Rate limiting: disabled")
+
         self.logger.info("=" * 60)
+
+        # Log audit event
+        log_audit_event(
+            "ocsp_responder_start",
+            "success",
+            f"OCSP responder started on {self.host}:{self.port}",
+            metadata={"host": self.host, "port": self.port}
+        )
 
         try:
             self.server.serve_forever()
         except KeyboardInterrupt:
             self.logger.info("OCSP Responder stopped by user")
+            log_audit_event("ocsp_responder_stop", "success", "OCSP responder stopped")
             self.server.shutdown()

@@ -13,11 +13,7 @@ class SerialGenerator:
         self.use_counter = use_counter
 
     def generate_serial(self) -> str:
-        """
-        Generate a unique 64-bit serial number.
-        High 32 bits: timestamp or counter
-        Low 32 bits: CSPRNG
-        """
+
         if self.use_counter:
             # Use persistent counter from database
             high_bits = self.db.get_next_serial_counter() & 0xFFFFFFFF
@@ -38,6 +34,6 @@ class SerialGenerator:
         return serial_hex
 
     def validate_serial_uniqueness(self, serial_hex: str) -> bool:
-        """Validate that serial number is unique in database"""
+
         existing = self.db.get_certificate_by_serial(serial_hex)
         return existing is None
