@@ -349,24 +349,39 @@ openssl verify -CAfile pki/certs/ca.cert.pem -untrusted pki/certs/intermediate.c
 ~~~~
 PythonProjectMicroPKI/
 ├── micropki/
-│   ├── __init__.py
+│   ├── __init__.py              # Версия 0.6.0
 │   ├── __main__.py
-│   ├── ca.py              # Root CA
-│   ├── certificates.py    # Работа с сертификатами
-│   ├── chain.py           # Проверка цепочек
-│   ├── cli.py             # CLI интерфейс
-│   ├── crypto_utils.py    # Криптографические утилиты
-│   ├── csr.py             # CSR обработка
-│   ├── intermediate.py    # Intermediate CA
-│   ├── logger.py          # Логирование
-│   └── templates.py       # Шаблоны сертификатов
+│   ├── ca.py                    # Root CA
+│   ├── certificates.py          # Работа с сертификатами
+│   ├── chain.py                 # Базовая проверка цепочек
+│   ├── cli.py                   # CLI интерфейс (с client subcommand)
+│   ├── client_cli.py            # Клиентские команды 
+│   ├── crypto_utils.py          # Криптографические утилиты
+│   ├── csr.py                   # CSR генерация и обработка
+│   ├── database.py              # SQLite база данных
+│   ├── intermediate.py          # Intermediate CA (с поддержкой CSR)
+│   ├── logger.py                # Логирование
+│   ├── ocsp.py                  # OCSP responder логика
+│   ├── ocsp_responder.py        # OCSP HTTP сервер
+│   ├── repository.py            # HTTP репозиторий (с /request-cert)
+│   ├── revocation.py            # CRL генерация
+│   ├── revocation_check.py      # Проверка отзыва 
+│   ├── serial.py                # Генерация серийных номеров
+│   ├── templates.py             # Шаблоны сертификатов
+│   └── validation.py            # Path validation engine 
 ├── tests/
 │   ├── __init__.py
 │   ├── test_ca.py
 │   ├── test_crypto_utils.py
 │   ├── test_csr.py
+│   ├── test_database.py
+│   ├── test_ocsp.py
+│   ├── test_revocation.py
+│   ├── test_serial.py
 │   ├── test_templates.py
-│   └── test_chain.py
+│   ├── test_client_cli.py
+│   ├── test_validation.py
+│   └── test_revocation_fallback.py
 ├── requirements.txt
 ├── setup.py
 ├── pyproject.toml
@@ -677,7 +692,7 @@ curl http://localhost:8080/crl?ca=root
 openssl crl -inform PEM -in crl.pem -text -noout
 openssl crl -inform PEM -in crl.pem -CAfile ca.cert.pem -noout
 Структура директорий (Sprint 4)
-text
+---
 <out-dir>/
 ├── private/
 │   ├── ca.key.pem
@@ -691,7 +706,7 @@ text
 │   └── intermediate.crl.pem
 ├── micropki.db
 └── policy.txt
-text
+---
 
 ## Запуск тестов
 
@@ -837,7 +852,7 @@ curl "http://localhost:8080/crl?ca=root" --output root.crl.pem
 # Проверка статуса сервера
 curl http://localhost:8080/health
 Структура директорий (Sprint 5)
-
+---
 <out-dir>/
 ├── private/                      # Зашифрованные закрытые ключи
 │   ├── ca.key.pem               # Ключ корневого CA
@@ -855,7 +870,7 @@ curl http://localhost:8080/health
 ├── micropki.db                   # База данных SQLite
 └── policy.txt                    # Документ политики безопасности
 Структура базы данных
-
+---
 -- Таблица сертификатов
 CREATE TABLE certificates (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -923,4 +938,209 @@ openssl ocsp -respin response.der \
 Тестирование
 Запуск всех тестов
 bash
+pytest tests/ -v
+
+## Спринт 6 
+
+- **Client CSR Generation**: Генерация закрытых ключей и CSR для подачи в CA
+- **Certificate Request API**: HTTP endpoint для автоматической выдачи сертификатов по CSR
+- **Path Validation Engine**: Полная RFC 5280 валидация цепочек сертификатов
+- **Revocation Checking**: Проверка статуса отзыва с OCSP-first, CRL-fallback логикой
+- **Chain Building**: Автоматическое построение цепочки от листового до доверенного корневого сертификата
+- **Extended Key Usage Validation**: Проверка соответствия EKU шаблону (server, client, code_signing)
+
+## Требования
+
+- Python 3.8 или выше
+- Зависимости указаны в requirements.txt
+
+## Установка
+
+### 1. Клонирование репозитория
+
+
+git clone <url-репозитория>
+cd PythonProjectMicroPKI
+2. Создание виртуального окружения
+Структура директорий
+---
+pki/
+├── private/                      # Зашифрованные закрытые ключи
+│   ├── ca.key.pem               # Ключ корневого CA
+│   └── intermediate.key.pem     # Ключ промежуточного CA
+├── certs/                        # Сертификаты
+│   ├── ca.cert.pem              # Сертификат корневого CA
+│   ├── intermediate.cert.pem    # Сертификат промежуточного CA
+│   ├── ocsp.cert.pem            # Сертификат OCSP подписанта
+│   ├── ocsp.key.pem             # Ключ OCSP (НЕЗАШИФРОВАННЫЙ)
+│   └── *.cert.pem               # Выпущенные сертификаты
+├── crl/                          # Списки отзыва
+│   ├── root.crl.pem             # CRL корневого CA
+│   └── intermediate.crl.pem     # CRL промежуточного CA
+├── csrs/                         # Опционально, для хранения CSR
+├── micropki.db                   # База данных SQLite
+└── policy.txt                    # Документ политики безопасности
+---
+Валидация цепочки сертификатов
+Движок валидации реализует упрощённую версию RFC 5280 и выполняет следующие проверки:
+
+Построение цепочки: Автоматическое построение пути от листового до доверенного корневого сертификата
+
+Проверка подписи: Верификация подписи каждого сертификата публичным ключом издателя
+
+Период действия: Проверка, что текущее время находится в пределах notBefore/notAfter
+
+Basic Constraints: Проверка CA флага и ограничений пути
+
+Key Usage: Проверка наличия необходимых key usage расширений
+
+Extended Key Usage: Опциональная проверка соответствия EKU шаблону
+
+Отзыв: OCSP-first, CRL-fallback проверка статуса
+
+Пример вывода валидации
+
+============================================================
+CERTIFICATE CHAIN VALIDATION
+============================================================
+Leaf Subject: CN=app.example.com,O=MicroPKI
+Validation Time: 2024-01-15 10:30:00
+------------------------------------------------------------
+
+[1] Certificate: CN=app.example.com,O=MicroPKI
+    Issuer: CN=MicroPKI Intermediate CA,O=MicroPKI,C=RU
+    Serial: 2A7F3B8E1C4D5F6A
+    Status: ✓ VALID
+      ✓ Signature Verification: Signature is valid
+      ✓ Validity Period: Valid from 2024-01-01 to 2025-01-01
+      ✓ Basic Constraints: No Basic Constraints (default CA=FALSE)
+      ○ Path Length: No path length constraint
+      ✓ Key Usage: Has appropriate key usage for end-entity
+      ✓ Extended Key Usage: Certificate has server EKU
+
+[2] Certificate: CN=MicroPKI Intermediate CA,O=MicroPKI,C=RU
+    Issuer: CN=MicroPKI Root CA,O=MicroPKI,C=RU
+    Serial: 3B8E5F2A7D1C4E6B
+    Status: ✓ VALID
+      ✓ Signature Verification: Signature is valid
+      ✓ Validity Period: Valid from 2023-01-01 to 2028-01-01
+      ✓ Basic Constraints: CA=True
+      ✓ Path Length: Path length constraint: 0
+      ✓ Key Usage: CA certificate has keyCertSign
+      ○ Extended Key Usage: No Extended Key Usage extension
+
+------------------------------------------------------------
+Revocation Status: GOOD
+------------------------------------------------------------
+OVERALL RESULT: VALID ✓
+============================================================
+Проверка с помощью OpenSSL
+Просмотр сертификата
+
+openssl x509 -in pki/certs/ca.cert.pem -text -noout
+Проверка цепочки
+
+openssl verify -CAfile pki/certs/ca.cert.pem \
+    -untrusted pki/certs/intermediate.cert.pem \
+    pki/certs/app.cert.pem
+Проверка CRL
+
+openssl crl -inform PEM -in pki/crl/intermediate.crl.pem -text -noout
+openssl crl -inform PEM -in pki/crl/intermediate.crl.pem \
+    -CAfile pki/certs/intermediate.cert.pem -noout
+OCSP запрос
+
+openssl ocsp -issuer pki/certs/intermediate.cert.pem \
+    -cert pki/certs/app.cert.pem \
+    -url http://localhost:8081/ocsp \
+    -resp_text \
+    -nonce
+python -m venv venv
+Активация виртуального окружения:
+
+Windows: venv\Scripts\activate
+
+macOS/Linux: source venv/bin/activate
+
+3. Установка зависимостей
+
+pip install -r requirements.txt
+4. Установка пакета в режиме разработки
+
+pip install -e .
+Быстрый старт (Sprint 6)
+1. Подготовка паролей
+
+mkdir -p secrets
+echo "root_secure_passphrase_123" > secrets/root.pass
+echo "intermediate_secure_passphrase_456" > secrets/intermediate.pass
+2. Создание Root CA
+
+micropki ca init \
+    --subject "CN=MicroPKI Root CA,O=MicroPKI,C=RU" \
+    --key-type rsa \
+    --key-size 4096 \
+    --passphrase-file secrets/root.pass \
+    --out-dir ./pki \
+    --validity-days 3650
+3. Создание Intermediate CA
+
+micropki ca issue-intermediate \
+    --root-cert ./pki/certs/ca.cert.pem \
+    --root-key ./pki/private/ca.key.pem \
+    --root-pass-file secrets/root.pass \
+    --subject "CN=MicroPKI Intermediate CA,O=MicroPKI,C=RU" \
+    --key-type rsa \
+    --passphrase-file secrets/intermediate.pass \
+    --out-dir ./pki \
+    --validity-days 1825 \
+    --pathlen 0
+4. Инициализация базы данных
+bash
+micropki db init --db-path ./pki/micropki.db
+5. Генерация CSR (Клиент)
+
+micropki client gen-csr \
+    --subject "CN=app.example.com,O=MicroPKI" \
+    --key-type rsa \
+    --key-size 2048 \
+    --san dns:app.example.com \
+    --san dns:api.example.com \
+    --out-key ./app.key.pem \
+    --out-csr ./app.csr.pem
+6. Запрос сертификата через API
+
+# Запуск репозитория в фоне
+micropki repo serve --host 127.0.0.1 --port 8080 &
+REPO_PID=$!
+
+# Отправка CSR и получение сертификата
+micropki client request-cert \
+    --csr ./app.csr.pem \
+    --template server \
+    --ca-url http://localhost:8080 \
+    --out-cert ./app.cert.pem
+
+# Остановка репозитория
+kill $REPO_PID
+7. Валидация цепочки сертификатов
+
+micropki client validate \
+    --cert ./app.cert.pem \
+    --untrusted ./pki/certs/intermediate.cert.pem \
+    --trusted ./pki/certs/ca.cert.pem \
+    --mode full \
+    --format text
+8. Проверка статуса отзыва
+
+# Отзыв сертификата
+micropki ca revoke <SERIAL> --reason keyCompromise --force
+
+# Проверка статуса (OCSP first, CRL fallback)
+micropki client check-status \
+    --cert ./app.cert.pem \
+    --ca-cert ./pki/certs/intermediate.cert.pem
+    Тестирование
+## Запуск всех тестов
+
 pytest tests/ -v
