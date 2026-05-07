@@ -446,7 +446,7 @@ micropki repo serve --host 127.0.0.1 --port 8080
 # Проверка статуса
 micropki repo status --port 8080
 7. API запросы
-bash
+
 # Получить сертификат по серийному номеру
 curl http://localhost:8080/certificate/2A7F... --output cert.pem
 
@@ -500,7 +500,7 @@ GET	/ca/intermediate	Получить промежуточный сертифи�
 GET	/crl	CRL (заглушка - 501)
 GET	/health	Проверка здоровья сервера
 Тестирование Sprint 3
-bash
+
 # Запуск всех тестов
 pytest tests/ -v
 
@@ -510,7 +510,7 @@ pytest tests/test_database.py tests/test_serial.py -v
 # Тестирование API (требуется запущенный сервер)
 pytest tests/test_repository.py -v
 Интеграционный тест
-bash
+
 # Полный цикл работы
 ./demo_sprint3.sh
 Лицензия
@@ -670,18 +670,18 @@ micropki ca revoke 3B8E5678... --reason superseded --force
 # superseded, cessationOfOperation, certificateHold,
 # removeFromCRL, privilegeWithdrawn, aACompromise
 Генерация CRL
-bash
+
 # Генерация CRL для Intermediate CA
 micropki ca gen-crl --ca intermediate --next-update 14
 
 # Генерация CRL для Root CA с указанием выходного файла
 micropki ca gen-crl --ca root --out-file ./custom/root.crl.pem
 Проверка статуса отзыва
-bash
+
 # Проверка статуса сертификата
 micropki ca check-revoked 2A7F1234...
 CRL HTTP Endpoints
-bash
+
 # Получить CRL Intermediate CA
 curl http://localhost:8080/crl
 
@@ -692,7 +692,7 @@ curl http://localhost:8080/crl?ca=root
 openssl crl -inform PEM -in crl.pem -text -noout
 openssl crl -inform PEM -in crl.pem -CAfile ca.cert.pem -noout
 Структура директорий (Sprint 4)
----
+~~~
 <out-dir>/
 ├── private/
 │   ├── ca.key.pem
@@ -706,7 +706,7 @@ openssl crl -inform PEM -in crl.pem -CAfile ca.cert.pem -noout
 │   └── intermediate.crl.pem
 ├── micropki.db
 └── policy.txt
----
+~~~
 
 ## Запуск тестов
 
@@ -852,7 +852,7 @@ curl "http://localhost:8080/crl?ca=root" --output root.crl.pem
 # Проверка статуса сервера
 curl http://localhost:8080/health
 Структура директорий (Sprint 5)
----
+~~~
 <out-dir>/
 ├── private/                      # Зашифрованные закрытые ключи
 │   ├── ca.key.pem               # Ключ корневого CA
@@ -870,7 +870,7 @@ curl http://localhost:8080/health
 ├── micropki.db                   # База данных SQLite
 └── policy.txt                    # Документ политики безопасности
 Структура базы данных
----
+~~~
 -- Таблица сертификатов
 CREATE TABLE certificates (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -937,7 +937,7 @@ openssl ocsp -respin response.der \
     -verify_other pki/certs/ocsp.cert.pem
 Тестирование
 Запуск всех тестов
-bash
+
 pytest tests/ -v
 
 ## Спринт 6 
@@ -963,7 +963,7 @@ git clone <url-репозитория>
 cd PythonProjectMicroPKI
 2. Создание виртуального окружения
 Структура директорий
----
+~~~
 pki/
 ├── private/                      # Зашифрованные закрытые ключи
 │   ├── ca.key.pem               # Ключ корневого CA
@@ -980,7 +980,7 @@ pki/
 ├── csrs/                         # Опционально, для хранения CSR
 ├── micropki.db                   # База данных SQLite
 └── policy.txt                    # Документ политики безопасности
----
+~~~
 Валидация цепочки сертификатов
 Движок валидации реализует упрощённую версию RFC 5280 и выполняет следующие проверки:
 
@@ -1096,7 +1096,7 @@ micropki ca issue-intermediate \
     --validity-days 1825 \
     --pathlen 0
 4. Инициализация базы данных
-bash
+
 micropki db init --db-path ./pki/micropki.db
 5. Генерация CSR (Клиент)
 
@@ -1167,7 +1167,7 @@ MicroPKI — это легковесная реализация PKI для об�
 - Маркировка скомпрометированных ключей
 - Блокировка выдачи новых сертификатов по скомпрометированным ключам
 
----
+
 
 ## Система аудита и целостность логов
 
@@ -1175,7 +1175,6 @@ MicroPKI — это легковесная реализация PKI для об�
 
 Аудит лог хранится в `./pki/audit/audit.log` в формате NDJSON с hash-цепочкой:
 
-```
 {
   "timestamp": "2026-02-13T15:04:05.123456Z",
   "level": "AUDIT",
@@ -1415,7 +1414,7 @@ micropki client check-status \
 pytest tests/ -v
 
 ##  Архитектура системы (Sprint 8)
----
+~~~
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │ CLI (micropki) │
 │ ca | client | repo | ocsp | audit | verify │
@@ -1442,7 +1441,7 @@ pytest tests/ -v
 │ │ Database │ │ Log │ │ Engine │ │ Log │ │ Keys │ │
 │ └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────────────┘ │
 └─────────────────────────────────────────────────────────────────────────────┘
----
+~~~
 
 
 ##  Security Considerations 
@@ -1450,7 +1449,7 @@ pytest tests/ -v
  **MicroPKI создана для ОБУЧЕНИЯ и ПРОТОТИПИРОВАНИЯ. НЕ ИСПОЛЬЗУЙТЕ В PRODUCTION!**
 
 ### Известные ограничения безопасности
----
+~~~
 | Проблема | Риск | Рекомендация |
 |----------|------|---------------|
 | **End-entity ключи хранятся незашифрованными** | Компрометация ключа при доступе к файловой системе | Используйте HSM или шифрование диска |
@@ -1460,7 +1459,7 @@ pytest tests/ -v
 | **Аудит-лог подписан hash-цепочкой, но не цифровой подписью** | При компрометации системы злоумышленник может пересчитать хэши | Добавьте отдельный ключ для подписи логов |
 | **Certificate Transparency симулированный** | Нет публичной верификации | Интегрируйтесь с реальными CT логами (Google, Cloudflare) |
 | **SQLite без шифрования** | Все сертификаты в открытом виде | Используйте SQLCipher или PostgreSQL с TLS |
----
+~~~
 ### Рекомендации для production-ready PKI
 
 1. **Хранение ключей**: Используйте HSM (YubiHSM, AWS CloudHSM) через PKCS#11
