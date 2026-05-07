@@ -1413,3 +1413,240 @@ micropki client check-status \
 ## Запуск всех тестов
 
 pytest tests/ -v
+
+##  Архитектура системы (Sprint 8)
+---
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ CLI (micropki) │
+│ ca | client | repo | ocsp | audit | verify │
+└───────────────────────┬─────────────────────────────────────────────────────┘
+│
+┌───────────────┼───────────────────────────────┐
+│ │ │
+┌───────▼───────┐ ┌──────▼──────┐ ┌─────────────────────▼─────────────────────┐
+│ Root CA │ │ Client CLI │ │ HTTP Servers │
+│ - RSA 4096 │ │ - gen-csr │ │ ┌──────────────┐ ┌──────────────────┐ │
+│ - ECC P-384 │ │ - request │ │ │ Repository │ │ OCSP Responder │ │
+└───────┬───────┘ │ - validate │ │ │ Port 8080 │ │ Port 8081 │ │
+│ └─────────────┘ │ │ - /certificate│ │ - POST /ocsp │ │
+┌───────▼───────────────────────┐ │ │ - /crl │ │ - /health │ │
+│ Intermediate CA │ │ │ - /request-cert│ │ - Rate Limiting │ │
+│ - Signed by Root │ │ └──────────────┘ └──────────────────┘ │
+│ - Issues end-entity certs │ └─────────────────────────────────────────────┘
+└───────┬───────────────────────┘
+│
+┌───────▼─────────────────────────────────────────────────────────────────────┐
+│ Security & Persistence Layer │
+│ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────────┐ │
+│ │ SQLite │ │ Audit │ │ Policy │ │ CT │ │ Compromised │ │
+│ │ Database │ │ Log │ │ Engine │ │ Log │ │ Keys │ │
+│ └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────────────┘ │
+└─────────────────────────────────────────────────────────────────────────────┘
+---
+
+
+##  Security Considerations 
+
+ **MicroPKI создана для ОБУЧЕНИЯ и ПРОТОТИПИРОВАНИЯ. НЕ ИСПОЛЬЗУЙТЕ В PRODUCTION!**
+
+### Известные ограничения безопасности
+---
+| Проблема | Риск | Рекомендация |
+|----------|------|---------------|
+| **End-entity ключи хранятся незашифрованными** | Компрометация ключа при доступе к файловой системе | Используйте HSM или шифрование диска |
+| **Passphrase'ы читаются из файлов** | Passphrase может быть скомпрометирован | Храните passphrase'ы в защищённом хранилище (Vault, KMS) |
+| **OCSP responder без HTTPS** | Возможен MITM-атака на OCSP ответы | Добавьте TLS или используйте stapling |
+| **Rate limiting базовый (token bucket)** | Не защищает от DDoS с разных IP | Добавьте распределённый rate limiting (Redis) |
+| **Аудит-лог подписан hash-цепочкой, но не цифровой подписью** | При компрометации системы злоумышленник может пересчитать хэши | Добавьте отдельный ключ для подписи логов |
+| **Certificate Transparency симулированный** | Нет публичной верификации | Интегрируйтесь с реальными CT логами (Google, Cloudflare) |
+| **SQLite без шифрования** | Все сертификаты в открытом виде | Используйте SQLCipher или PostgreSQL с TLS |
+---
+### Рекомендации для production-ready PKI
+
+1. **Хранение ключей**: Используйте HSM (YubiHSM, AWS CloudHSM) через PKCS#11
+2. **База данных**: PostgreSQL с шифрованием at-rest и TLS для подключений
+3. **Аудит**: Подписывайте логи отдельным ключом, хранящимся в HSM
+4. **OCSP**: Добавьте TLS и implement stapling на web-серверах
+5. **Мониторинг**: Добавьте метрики (Prometheus) для всех операций
+6. **HA**: Запускайте несколько экземпляров за балансировщиком
+
+##  Тестирование (Sprint 8)
+
+### Установка тестовых зависимостей
+
+
+pip install pytest pytest-cov pytest-benchmark
+Запуск всех тестов
+
+# Все тесты с покрытием
+pytest tests/ -v --cov=micropki --cov-report=term --cov-report=html
+
+# Только unit-тесты (быстрые)
+pytest tests/ -m "not perf and not slow" -v
+
+# Performance тесты (1000 сертификатов)
+pytest tests/test_performance.py -m perf -v
+
+# С сохранением отчёта
+pytest tests/ --cov=micropki --cov-report=html
+open htmlcov/index.html
+
+Performance тесты
+
+# Запуск performance теста (1000 сертификатов)
+pytest tests/test_performance.py::test_issue_1000_certificates_performance -m perf -v -s
+
+# Ожидаемый вывод:
+# ============================================================
+# PERFORMANCE TEST RESULTS
+# ============================================================
+# Certificates issued: 1000
+# Issuance time: 12.34 seconds
+# Rate: 81.0 certificates/second
+# Validation time: 5.67 seconds
+# Rate: 176.3 validations/second
+# ============================================================
+Полная демонстрация (Sprint 8)
+Запуск demo скрипта
+
+# Делаем скрипт исполняемым
+chmod +x demo/demo.sh
+
+# Запускаем демонстрацию
+./demo/demo.sh
+Что демонстрирует скрипт
+Шаг	Демонстрация	Ожидаемый результат
+1-5	Создание Root и Intermediate CA	 Сертификаты созданы
+6-9	Генерация CSR и выпуск сертификатов	 Сертификаты выданы
+10-11	TLS сервер с HTTPS	 curl успешно подключается
+12	Code signing подпись и верификация	 Подпись verified
+13	Отзыв сертификата	 CRL обновлён
+14	Повторное подключение с отозванным сертификатом	 Соединение отклонено
+15	Проверка целостности аудит-лога	 Hash chain valid
+16	Проверка политик безопасности	 Запрос отклонён
+Ожидаемый вывод демо
+bash
+╔══════════════════════════════════════════════════════════════╗
+║           MicroPKI - Демонстрация всех возможностей          ║
+║                      Sprint 8 Final Demo                      ║
+╚══════════════════════════════════════════════════════════════╝
+
+[1/18] Подготовка окружения...
+     Готово
+[2/18] Создание passphrase файлов...
+     Passphrase файлы созданы
+...
+[14/18] TLS Демонстрация с HTTPS сервером...
+     Тестируем HTTPS соединение (должно быть успешным):
+Hello from MicroPKI Secure Server!
+     HTTPS соединение успешно установлено!
+...
+[16/18] Отзыв сертификата и тест CRL...
+     Пытаемся подключиться с отозванным сертификатом:
+     Соединение ОТКЛОНЕНО (сертификат отозван) - правильно!
+...
+╔══════════════════════════════════════════════════════════════╗
+║                     ДЕМО УСПЕШНО ЗАВЕРШЕНО!                  ║
+╚══════════════════════════════════════════════════════════════╝
+ Полный справочник CLI команд
+Управление сертификатами
+
+# Root CA
+micropki ca init --subject "/CN=Root CA" --passphrase-file root.pass
+
+# Intermediate CA  
+micropki ca issue-intermediate --root-cert ca.cert.pem --root-key ca.key.pem
+
+# Выпуск сертификата
+micropki ca issue-cert --ca-cert inter.cert.pem --template server --subject "/CN=test"
+
+# Отзыв
+micropki ca revoke <SERIAL> --reason keyCompromise --force
+
+# Генерация CRL
+micropki ca gen-crl --ca intermediate --next-update 7
+Клиентские команды
+
+# Генерация CSR
+micropki client gen-csr --subject "/CN=client" --san dns:client.local
+
+# Запрос сертификата через API
+micropki client request-cert --csr request.csr --template server --ca-url http://localhost:8080
+
+# Валидация цепочки
+micropki client validate --cert cert.pem --trusted ca.cert.pem
+
+# Проверка статуса
+micropki client check-status --cert cert.pem --ca-cert ca.cert.pem
+Серверы
+
+# Repository server
+micropki repo serve --port 8080 --rate-limit 10
+
+# OCSP responder
+micropki ocsp serve --responder-cert ocsp.cert.pem --responder-key ocsp.key.pem --port 8081
+Аудит и безопасность
+
+# Просмотр аудит-лога
+micropki audit query --operation issue_certificate --format table
+
+# Проверка целостности
+micropki audit verify
+
+# Проверка CT лога
+micropki audit ct-verify --serial 2A7F3B8C...
+
+# Компрометация ключа
+micropki ca compromise --cert compromised.cert.pem --reason keyCompromise
+🔧 Устранение неполадок
+Проблема: "ModuleNotFoundError: No module named 'micropki'"
+
+# Решение: установить пакет в режиме разработки
+pip install -e .
+Проблема: "Permission denied" при запуске demo.sh
+
+# Решение: добавить права на выполнение
+chmod +x demo/demo.sh
+Проблема: "Address already in use" при запуске серверов
+
+# Найти и убить процесс на порту 8080
+lsof -i :8080
+kill -9 <PID>
+Проблема: Тесты не проходят из-за OpenSSL
+
+# Установить OpenSSL (Ubuntu/Debian)
+sudo apt-get install openssl
+
+
+
+
+
+### Шаг 2: Создай недостающий файл `demo/demo.sh`
+
+Я уже дал тебе полный скрипт ранее. Скопируй его в файл `demo/demo.sh` и сделай исполняемым.
+
+### Шаг 3: Создай файл `tests/test_performance.py`
+
+Я дал его в предыдущем сообщении. Скопируй его в папку `tests/`.
+
+### Шаг 4: Создай файл `.github/workflows/ci.yml`
+
+Я дал его ранее. Скопируй в папку `.github/workflows/`.
+
+### Шаг 5: Запусти финальную проверку
+
+Выполни эти команды в своём терминале:
+
+
+# 1. Проверь, что все тесты проходят
+pytest tests/ -v --cov=micropki
+
+# 2. Запусти демо
+chmod +x demo/demo.sh
+./demo/demo.sh
+
+# 3. Создай релизный тег
+git add .
+git commit -m "Sprint 8: Final release v1.0.0 with full demo, performance tests, and documentation"
+git tag -a v1.0.0 -m "MicroPKI Release 1.0.0 - Complete PKI implementation"
+git push origin main --tags
